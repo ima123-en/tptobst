@@ -1,0 +1,926 @@
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+local SoundService = game:GetService("SoundService")
+local LP = Players.LocalPlayer
+
+local HIP_HEIGHT_VAL = 20
+local TOOL_NAME = "Quantum Cloner"
+local CARPET_NAME = "Flying Carpet"
+
+local Net = ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Net")
+local NetModule = require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Net"))
+local TeleportRE = Net:FindFirstChild("RE/QuantumCloner/OnTeleport")
+
+local SAVE_KEY = "Schmeckt_TPPanel_FinalSave_" .. LP.UserId
+
+local BASES_FLOOR = {
+    Vector3.new(-468.09, -6.89, 220.59), Vector3.new(-469.80, -6.83, 113.17),
+    Vector3.new(-468.72, -6.83, 6.54), Vector3.new(-468.17, -6.83, -101.93),
+    Vector3.new(-348.27, -6.83, -98.99), Vector3.new(-350.02, -6.89, 4.95),
+    Vector3.new(-352.35, -7.04, 112.44), Vector3.new(-349.17, -6.89, 219.38)
+}
+
+local BASES_AIR = {
+    Vector3.new(-342.89, 18.35, 6.95), Vector3.new(-342.75, 18.35, 113.61),
+    Vector3.new(-343.02, 18.42, 220.80), Vector3.new(-476.23, 18.42, 220.83),
+    Vector3.new(-476.12, 18.42, 114.66), Vector3.new(-475.98, 18.42, 7.38),
+    Vector3.new(-476.18, 18.42, -99.49), Vector3.new(-343.06, 18.42, -101.46)
+}
+
+local Settings = {
+    AutoTp = true,
+    AutoWalk = true,
+    AutoClone = true,
+    AutoUseClone = true,
+    AutoSwap = false,
+    TpToBrainrotAfter = false,
+    TpAfterHit = false,
+    TpToBrainrotKey = "G"
+}
+
+local function SaveSettings()
+    pcall(function()
+        if writefile then
+            writefile(SAVE_KEY .. ".json", HttpService:JSONEncode(Settings))
+        end
+    end)
+end
+
+local function LoadSettings()
+    pcall(function()
+        if readfile and isfile and isfile(SAVE_KEY .. ".json") then
+            local data = HttpService:JSONDecode(readfile(SAVE_KEY .. ".json"))
+            for k, v in pairs(data) do
+                if Settings[k] ~= nil then Settings[k] = v end
+            end
+        end
+    end)
+end
+LoadSettings()
+
+local Database = {}
+local function LoadDatabase()
+    pcall(function()
+        local animals = ReplicatedStorage:FindFirstChild("Datas") and ReplicatedStorage.Datas:FindFirstChild("Animals")
+        if animals and animals:IsA("ModuleScript") then
+            local data = require(animals)
+            for key, info in pairs(data) do
+                if type(info) == "table" and info.Generation then
+                    Database[key] = info.Generation
+                    if info.DisplayName then Database[info.DisplayName] = info.Generation end
+                end
+            end
+        end
+    end)
+end
+LoadDatabase()
+
+local function GetMyPlot()
+    local plots = Workspace:FindFirstChild("Plots")
+    if not plots then return nil end
+    for _, plot in pairs(plots:GetChildren()) do
+        for _, obj in pairs(plot:GetDescendants()) do
+            if obj:IsA("TextLabel") and obj.Text and (obj.Text:find(LP.Name) or obj.Text:find(LP.DisplayName)) then
+                return plot
+            end
+        end
+    end
+    return nil
+end
+
+local function GetNearestBase(pos)
+    local list = (pos.Y < 5) and BASES_FLOOR or BASES_AIR
+    local nearest, shortest = list[1], (pos - list[1]).Magnitude
+    for i = 2, #list do
+        local d = (pos - list[i]).Magnitude
+        if d < shortest then shortest = d nearest = list[i] end
+    end
+    return nearest
+end
+
+local function GetPriorityTarget()
+    local PS = getgenv().PrioritySystem
+    if not PS then return nil, nil, nil end
+    
+    local selectedData = PS.SelectedData
+    if not selectedData then return nil, nil, nil end
+    if not selectedData.plot or not selectedData.slot then return nil, nil, nil end
+    
+    local model = nil
+    if PS.GetSelectedModel then
+        model = PS.GetSelectedModel()
+    end
+    if not model then
+        model = PS.SelectedModel
+    end
+    
+    local pos = nil
+    if PS.GetWorldPosition then
+        pos = PS.GetWorldPosition()
+    end
+    
+    if not pos and model then
+        local root = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+        if root then pos = root.Position end
+    end
+    
+    if not pos then
+        local plots = Workspace:FindFirstChild("Plots")
+        if plots then
+            local plot = plots:FindFirstChild(selectedData.plot)
+            if plot then
+                local podiums = plot:FindFirstChild("AnimalPodiums")
+                if podiums then
+                    local podium = podiums:FindFirstChild(tostring(selectedData.slot))
+                    if podium then
+                        pos = podium:GetPivot().Position
+                        for _, child in pairs(podium:GetDescendants()) do
+                            if child:IsA("Model") then
+                                local root = child:FindFirstChild("HumanoidRootPart") or child.PrimaryPart
+                                if root then
+                                    model = child
+                                    pos = root.Position
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    local name = selectedData.name or (model and model.Name) or "Unknown"
+    return model, pos, name
+end
+
+local function GetBestTarget(needBase)
+    local pModel, pPos, pName = GetPriorityTarget()
+    if pPos then
+        if needBase then
+            return pModel, pPos, GetNearestBase(pPos), pName
+        else
+            return pModel, pPos, nil, pName
+        end
+    end
+    
+    local bestModel, bestValue, bestPos, bestName = nil, -1, nil, nil
+    local plots = Workspace:FindFirstChild("Plots")
+    if not plots then return nil, nil, nil, nil end
+    local myPlot = GetMyPlot()
+
+    for _, plot in pairs(plots:GetChildren()) do
+        if plot ~= myPlot then
+            for _, obj in pairs(plot:GetDescendants()) do
+                if obj:IsA("Model") and Database[obj.Name] then
+                    local val = Database[obj.Name]
+                    if val > bestValue then
+                        local root = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
+                        if root then
+                            bestValue = val
+                            bestModel = obj
+                            bestPos = root.Position
+                            bestName = obj.Name
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if not bestPos then return nil, nil, nil, nil end
+    if needBase then
+        return bestModel, bestPos, GetNearestBase(bestPos), bestName
+    end
+    return bestModel, bestPos, nil, bestName
+end
+
+local function Equip(name)
+    local char = LP.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local tool = LP.Backpack:FindFirstChild(name) or (char and char:FindFirstChild(name))
+    if hum and tool then hum:EquipTool(tool) return true end
+    return false
+end
+
+local function InstantTeleport(hrp, targetPos, lookDir)
+    hrp.CFrame = CFrame.new(targetPos, targetPos + lookDir)
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+end
+
+local function IsRagdolled(humanoid)
+    if not humanoid then return true end
+    local state = humanoid:GetState()
+    return state == Enum.HumanoidStateType.Ragdoll
+        or state == Enum.HumanoidStateType.Physics
+        or state == Enum.HumanoidStateType.FallingDown
+        or state == Enum.HumanoidStateType.Dead
+end
+
+local isRunning = false
+local swapMonitorActive = false
+local posBeforeSwap = nil
+local floatAbort = false
+local savedHipHeight = 2.5
+local isFloating = false
+
+local LastRagdollTime = 0
+local RagdollCooldown = 0.5
+local WasRagdolledLastFrame = false
+local AllowTpAfterRagdoll = false
+
+local function StopFloatImmediately()
+    floatAbort = true
+    isFloating = false
+end
+
+local function OnBrainrotToolAdded(tool)
+    if tool:IsA("Tool") and Database[tool.Name] then
+        StopFloatImmediately()
+    end
+end
+
+local function OnCharacterSpawn(char)
+    LastRagdollTime = 0
+    WasRagdolledLastFrame = false
+    AllowTpAfterRagdoll = false
+    floatAbort = true
+    isFloating = false
+
+    local hum = char:WaitForChild("Humanoid", 5)
+    if hum then savedHipHeight = hum.HipHeight end
+
+    char.ChildAdded:Connect(OnBrainrotToolAdded)
+
+    task.delay(1.5, function()
+        if LP.Character == char then AllowTpAfterRagdoll = true end
+    end)
+end
+
+LP.CharacterAdded:Connect(OnCharacterSpawn)
+if LP.Character then OnCharacterSpawn(LP.Character) end
+LP.Backpack.ChildAdded:Connect(OnBrainrotToolAdded)
+
+-- ==================== NOTIFICATION SYSTEM ====================
+local NotificationGui = Instance.new("ScreenGui")
+NotificationGui.Name = "TPNotification"
+NotificationGui.ResetOnSpawn = false
+NotificationGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+NotificationGui.DisplayOrder = 999
+NotificationGui.Parent = LP:WaitForChild("PlayerGui")
+
+local NotifFrame = Instance.new("Frame")
+NotifFrame.Size = UDim2.new(0, 350, 0, 70)
+NotifFrame.Position = UDim2.new(0.5, -175, 0.08, 0)
+NotifFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+NotifFrame.BorderSizePixel = 0
+NotifFrame.BackgroundTransparency = 1
+NotifFrame.Visible = false
+NotifFrame.Parent = NotificationGui
+Instance.new("UICorner", NotifFrame).CornerRadius = UDim.new(0, 12)
+
+local NotifText = Instance.new("TextLabel")
+NotifText.Size = UDim2.new(1, 0, 1, 0)
+NotifText.BackgroundTransparency = 1
+NotifText.Text = ""
+NotifText.TextColor3 = Color3.fromRGB(255, 255, 255)
+NotifText.Font = Enum.Font.GothamBold
+NotifText.TextSize = 22
+NotifText.Parent = NotifFrame
+
+local function PlayNotificationSound()
+    pcall(function()
+        local sound = Instance.new("Sound")
+        sound.SoundId = "rbxassetid://106906535205123"
+        sound.Volume = 0.8
+        sound.Parent = SoundService
+        sound:Play()
+        game:GetService("Debris"):AddItem(sound, 3)
+    end)
+end
+
+local function ShowNotification(brainrotName)
+    NotifFrame.Visible = true
+    NotifFrame.BackgroundTransparency = 0
+    NotifText.Text = brainrotName .. " detected!"
+    NotifText.TextTransparency = 0
+    
+    PlayNotificationSound()
+    
+    -- Pulsing animation for 4 seconds
+    task.spawn(function()
+        local startTime = tick()
+        local duration = 4
+        
+        while tick() - startTime < duration do
+            -- Pulse from white to gray
+            for i = 0, 1, 0.05 do
+                if not NotifFrame.Visible then break end
+                local brightness = 1 - (math.sin(i * math.pi) * 0.4)
+                NotifText.TextColor3 = Color3.fromRGB(255 * brightness, 255 * brightness, 255 * brightness)
+                task.wait(0.03)
+            end
+        end
+        
+        -- Fade out
+        for i = 0, 1, 0.05 do
+            NotifFrame.BackgroundTransparency = i
+            NotifText.TextTransparency = i
+            task.wait(0.02)
+        end
+        
+        NotifFrame.Visible = false
+    end)
+end
+
+-- ==================== TELEPORT FUNCTIONS ====================
+local function TeleportToBrainrot()
+    local char = LP.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum then return end
+    if IsRagdolled(hum) then return end
+
+    local _, petPos = GetBestTarget(false)
+    if not petPos then return end
+
+    Equip(CARPET_NAME)
+    task.wait(0.1)
+
+    local isThirdFloor = math.abs(petPos.Y - 31.4) <= 2
+
+    if isThirdFloor then
+        floatAbort = false
+        isFloating = true
+
+        local safePos = Vector3.new(petPos.X, 22.2, petPos.Z)
+        InstantTeleport(hrp, safePos, Vector3.new(0, 0, -1))
+        task.wait(0.1)
+
+        local targetY = 31.4
+        local floatSpeed = 15
+        local startTime = tick()
+        local maxFloatTime = 5
+
+        while tick() - startTime < maxFloatTime do
+            if floatAbort then break end
+
+            char = LP.Character
+            hrp = char and char:FindFirstChild("HumanoidRootPart")
+            hum = char and char:FindFirstChildOfClass("Humanoid")
+
+            if not hrp or not hum then break end
+            if IsRagdolled(hum) then break end
+
+            local currentY = hrp.Position.Y
+            if currentY >= targetY - 0.5 then break end
+
+            local yDiff = targetY - currentY
+            local ySpeed = math.clamp(yDiff * 2, 5, floatSpeed)
+
+            hrp.AssemblyLinearVelocity = Vector3.new(0, ySpeed, 0)
+            hrp.AssemblyAngularVelocity = Vector3.zero
+
+            RunService.Heartbeat:Wait()
+        end
+
+        isFloating = false
+        if hrp then
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+        end
+        if hum then hum.HipHeight = savedHipHeight end
+        floatAbort = false
+    else
+        local targetPos = petPos + Vector3.new(0, 3, 0)
+        InstantTeleport(hrp, targetPos, Vector3.new(0, 0, -1))
+        if hum then hum.HipHeight = savedHipHeight end
+    end
+end
+
+local function StartSwapMonitor()
+    local char = LP.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    posBeforeSwap = hrp.Position
+    swapMonitorActive = true
+
+    task.spawn(function()
+        local timeout = tick() + 30
+        while swapMonitorActive and tick() < timeout do
+            task.wait(0.05)
+            char = LP.Character
+            hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if not hrp then break end
+
+            local dist = (hrp.Position - posBeforeSwap).Magnitude
+            if dist > 2.5 then
+                swapMonitorActive = false
+                task.wait(0.2)
+                TeleportToBrainrot()
+                return
+            end
+        end
+        swapMonitorActive = false
+    end)
+end
+
+local function ExecuteFlow(showNotification)
+    if isRunning then return end
+    isRunning = true
+
+    local Char = LP.Character
+    local HRP = Char and Char:FindFirstChild("HumanoidRootPart")
+    local Hum = Char and Char:FindFirstChildOfClass("Humanoid")
+    if not HRP or not Hum then isRunning = false return end
+
+    if Settings.AutoTp then
+        local model, petPos, targetBase, petName = GetBestTarget(true)
+        if not targetBase then isRunning = false return end
+
+        -- Show notification if requested
+        if showNotification and petName then
+            ShowNotification(petName)
+        end
+
+        Equip(CARPET_NAME)
+        savedHipHeight = Hum.HipHeight
+
+        local tween = TweenService:Create(Hum, TweenInfo.new(0.3, Enum.EasingStyle.Quad), {HipHeight = HIP_HEIGHT_VAL})
+        tween:Play()
+        tween.Completed:Wait()
+
+        local lookDir = (targetBase.X < -410) and Vector3.new(-1, 0, 0) or Vector3.new(1, 0, 0)
+        local tpPos = targetBase + Vector3.new(0, 2, 0)
+        InstantTeleport(HRP, tpPos, lookDir)
+
+        Hum.HipHeight = savedHipHeight
+        HRP.AssemblyLinearVelocity = Vector3.zero
+        HRP.AssemblyAngularVelocity = Vector3.zero
+
+        task.wait(0.15)
+
+        if Settings.AutoWalk then
+            Hum.WalkSpeed = 16
+            task.wait(0.1)
+
+            local startPos = HRP.Position
+            local forwardDir = (HRP.CFrame.LookVector * Vector3.new(1, 0, 1)).Unit
+            local goalPos = startPos + forwardDir * 30
+
+            Hum:MoveTo(goalPos)
+
+            local endTime = tick() + 0.6
+            while tick() < endTime do
+                if HRP.AssemblyLinearVelocity.Y > 5 then
+                    HRP.AssemblyLinearVelocity = Vector3.new(HRP.AssemblyLinearVelocity.X, 0, HRP.AssemblyLinearVelocity.Z)
+                end
+                RunService.Heartbeat:Wait()
+            end
+
+            Hum:MoveTo(HRP.Position)
+            HRP.AssemblyLinearVelocity = Vector3.zero
+        end
+
+        local usedClone = false
+        local didAutoSwap = false
+
+        if Settings.AutoClone then
+            Equip(TOOL_NAME)
+            task.wait(0.2)
+            local tool = Char:FindFirstChild(TOOL_NAME)
+            if tool then
+                usedClone = true
+                if Settings.AutoUseClone then
+                    tool:Activate()
+                    task.wait(0.3)
+                end
+
+                if Settings.AutoSwap then
+                    local internalRemote = tool:FindFirstChild("RemoteEvent", true) or tool:FindFirstChild("Remote", true)
+                    if internalRemote and internalRemote:IsA("RemoteEvent") then
+                        pcall(function() internalRemote:FireServer() end)
+                    end
+                    tool:Activate()
+                    task.wait(0.15)
+
+                    if TeleportRE then
+                        pcall(function() TeleportRE:FireServer() end)
+                    elseif NetModule then
+                        pcall(function() NetModule:RemoteEvent("QuantumCloner/OnTeleport"):FireServer() end)
+                    end
+
+                    task.wait(0.6)
+                    didAutoSwap = true
+                end
+            end
+        end
+
+        task.wait(0.1)
+        Hum.HipHeight = savedHipHeight
+        HRP.AssemblyLinearVelocity = Vector3.zero
+        HRP.AssemblyAngularVelocity = Vector3.zero
+        isRunning = false
+
+        if Settings.TpToBrainrotAfter then
+            if usedClone and not didAutoSwap then
+                StartSwapMonitor()
+            else
+                task.wait(0.1)
+                TeleportToBrainrot()
+            end
+        end
+        return
+    end
+    isRunning = false
+end
+
+RunService.Heartbeat:Connect(function()
+    local char = LP.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+    if hum and IsRagdolled(hum) then StopFloatImmediately() end
+
+    if not Settings.TpAfterHit then return end
+    if not AllowTpAfterRagdoll then return end
+    if isRunning or swapMonitorActive then return end
+    if not char or not hum then WasRagdolledLastFrame = false return end
+
+    local isNowRagdolled = IsRagdolled(hum)
+
+    if WasRagdolledLastFrame and not isNowRagdolled then
+        local now = tick()
+        if now - LastRagdollTime >= RagdollCooldown then
+            LastRagdollTime = now
+            TeleportToBrainrot()
+        end
+    end
+
+    WasRagdolledLastFrame = isNowRagdolled
+end)
+
+-- ==================== GUI ====================
+local parent = LP:WaitForChild("PlayerGui")
+if parent:FindFirstChild("TPPanel_Clean") then parent.TPPanel_Clean:Destroy() end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "TPPanel_Clean"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = parent
+
+local Main = Instance.new("Frame")
+Main.Name = "Main"
+Main.Size = UDim2.new(0, 270, 0, 400)
+Main.Position = UDim2.new(1, -285, 0, 50)
+Main.BackgroundColor3 = Color3.fromRGB(12, 12, 14)
+Main.BorderSizePixel = 0
+Main.Parent = ScreenGui
+Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 10)
+Instance.new("UIStroke", Main).Color = Color3.fromRGB(35, 35, 40)
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -20, 0, 36)
+Title.Position = UDim2.new(0, 14, 0, 4)
+Title.BackgroundTransparency = 1
+Title.Text = "TP Panel"
+Title.TextColor3 = Color3.fromRGB(210, 210, 215)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 15
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = Main
+
+local PriorityStatus = Instance.new("TextLabel")
+PriorityStatus.Size = UDim2.new(0, 100, 0, 20)
+PriorityStatus.Position = UDim2.new(1, -110, 0, 8)
+PriorityStatus.BackgroundTransparency = 1
+PriorityStatus.Text = ""
+PriorityStatus.TextColor3 = Color3.fromRGB(100, 200, 100)
+PriorityStatus.Font = Enum.Font.Gotham
+PriorityStatus.TextSize = 9
+PriorityStatus.TextXAlignment = Enum.TextXAlignment.Right
+PriorityStatus.Parent = Main
+
+Instance.new("Frame", Main).Size = UDim2.new(0.9, 0, 0, 1)
+Main:FindFirstChildOfClass("Frame").Position = UDim2.new(0.05, 0, 0, 40)
+Main:FindFirstChildOfClass("Frame").BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+Main:FindFirstChildOfClass("Frame").BorderSizePixel = 0
+
+local UIItems = {}
+local UpdateUILayout
+local KeybindFrame, KeybindButton
+
+local function CreateToggle(name, settingKey, isSubToggle, parentKey)
+    local holder = Instance.new("Frame")
+    holder.BackgroundColor3 = isSubToggle and Color3.fromRGB(16, 16, 20) or Color3.fromRGB(20, 20, 24)
+    holder.BorderSizePixel = 0
+    holder.Parent = Main
+    Instance.new("UICorner", holder).CornerRadius = UDim.new(0, 8)
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0.65, 0, 1, 0)
+    label.Position = UDim2.new(0, 12, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Text = name
+    label.Font = Enum.Font.Gotham
+    label.TextSize = isSubToggle and 11 or 12
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = holder
+
+    local toggleBg = Instance.new("Frame")
+    toggleBg.Size = UDim2.new(0, 40, 0, 20)
+    toggleBg.Position = UDim2.new(1, -52, 0.5, -10)
+    toggleBg.BorderSizePixel = 0
+    toggleBg.Parent = holder
+    Instance.new("UICorner", toggleBg).CornerRadius = UDim.new(1, 0)
+
+    local circle = Instance.new("Frame")
+    circle.Size = UDim2.new(0, 16, 0, 16)
+    circle.BorderSizePixel = 0
+    circle.Parent = toggleBg
+    Instance.new("UICorner", circle).CornerRadius = UDim.new(1, 0)
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.BackgroundTransparency = 1
+    btn.Text = ""
+    btn.Parent = toggleBg
+
+    local function updateVisual()
+        if Settings[settingKey] then
+            circle.Position = UDim2.new(0, 22, 0.5, -8)
+            circle.BackgroundColor3 = Color3.fromRGB(200, 200, 210)
+            toggleBg.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
+            label.TextColor3 = Color3.fromRGB(220, 220, 230)
+        else
+            circle.Position = UDim2.new(0, 2, 0.5, -8)
+            circle.BackgroundColor3 = Color3.fromRGB(80, 80, 90)
+            toggleBg.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+            label.TextColor3 = Color3.fromRGB(170, 170, 180)
+        end
+    end
+    updateVisual()
+
+    btn.MouseButton1Click:Connect(function()
+        Settings[settingKey] = not Settings[settingKey]
+        updateVisual()
+        SaveSettings()
+        UpdateUILayout()
+    end)
+
+    table.insert(UIItems, {
+        frame = holder,
+        isSubToggle = isSubToggle,
+        parentKey = parentKey,
+        height = isSubToggle and 30 or 36,
+        settingKey = settingKey
+    })
+
+    return holder
+end
+
+CreateToggle("Auto Tp To Best", "AutoTp", false)
+CreateToggle("Auto Walk To Wall", "AutoWalk", false)
+CreateToggle("Auto Clone After TP", "AutoClone", false)
+CreateToggle("Auto Use Clone", "AutoUseClone", true, "AutoClone")
+CreateToggle("Auto Swap (Risk)", "AutoSwap", true, "AutoClone")
+CreateToggle("Tp To Brainrot After", "TpToBrainrotAfter", false)
+CreateToggle("Tp After Hit", "TpAfterHit", false)
+
+KeybindFrame = Instance.new("Frame")
+KeybindFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
+KeybindFrame.BorderSizePixel = 0
+KeybindFrame.Parent = Main
+Instance.new("UICorner", KeybindFrame).CornerRadius = UDim.new(0, 8)
+
+local KeybindLabel = Instance.new("TextLabel")
+KeybindLabel.Size = UDim2.new(0.65, 0, 1, 0)
+KeybindLabel.Position = UDim2.new(0, 12, 0, 0)
+KeybindLabel.BackgroundTransparency = 1
+KeybindLabel.Text = "Brainrot TP Key"
+KeybindLabel.Font = Enum.Font.Gotham
+KeybindLabel.TextSize = 12
+KeybindLabel.TextXAlignment = Enum.TextXAlignment.Left
+KeybindLabel.TextColor3 = Color3.fromRGB(220, 220, 230)
+KeybindLabel.Parent = KeybindFrame
+
+local KeybindBg = Instance.new("Frame")
+KeybindBg.Size = UDim2.new(0, 60, 0, 22)
+KeybindBg.Position = UDim2.new(1, -72, 0.5, -11)
+KeybindBg.BorderSizePixel = 0
+KeybindBg.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+KeybindBg.Parent = KeybindFrame
+Instance.new("UICorner", KeybindBg).CornerRadius = UDim.new(1, 0)
+
+KeybindButton = Instance.new("TextButton")
+KeybindButton.Size = UDim2.new(1, 0, 1, 0)
+KeybindButton.BackgroundTransparency = 1
+KeybindButton.TextColor3 = Color3.fromRGB(200, 200, 210)
+KeybindButton.Font = Enum.Font.GothamBold
+KeybindButton.TextSize = 11
+KeybindButton.Text = Settings.TpToBrainrotKey or "G"
+KeybindButton.Parent = KeybindBg
+
+local Divider2 = Instance.new("Frame")
+Divider2.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+Divider2.BorderSizePixel = 0
+Divider2.Size = UDim2.new(0.9, 0, 0, 1)
+Divider2.Parent = Main
+
+local ManualBtn = Instance.new("TextButton")
+ManualBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+ManualBtn.Text = "Teleport (T)"
+ManualBtn.TextColor3 = Color3.fromRGB(190, 190, 200)
+ManualBtn.Font = Enum.Font.GothamBold
+ManualBtn.TextSize = 13
+ManualBtn.AutoButtonColor = false
+ManualBtn.BorderSizePixel = 0
+ManualBtn.Size = UDim2.new(0.9, 0, 0, 40)
+ManualBtn.Parent = Main
+Instance.new("UICorner", ManualBtn).CornerRadius = UDim.new(0, 8)
+Instance.new("UIStroke", ManualBtn).Color = Color3.fromRGB(40, 40, 48)
+
+ManualBtn.MouseEnter:Connect(function() TweenService:Create(ManualBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(35, 35, 42)}):Play() end)
+ManualBtn.MouseLeave:Connect(function() TweenService:Create(ManualBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(25, 25, 30)}):Play() end)
+ManualBtn.MouseButton1Click:Connect(function() task.spawn(function() ExecuteFlow(false) end) end)
+
+local StatusBar = Instance.new("Frame")
+StatusBar.BackgroundColor3 = Color3.fromRGB(16, 16, 19)
+StatusBar.BorderSizePixel = 0
+StatusBar.Size = UDim2.new(0.9, 0, 0, 24)
+StatusBar.Parent = Main
+Instance.new("UICorner", StatusBar).CornerRadius = UDim.new(0, 6)
+
+local StatusDot = Instance.new("Frame")
+StatusDot.Size = UDim2.new(0, 6, 0, 6)
+StatusDot.Position = UDim2.new(0, 8, 0.5, -3)
+StatusDot.BackgroundColor3 = Color3.fromRGB(100, 100, 110)
+StatusDot.BorderSizePixel = 0
+StatusDot.Parent = StatusBar
+Instance.new("UICorner", StatusDot).CornerRadius = UDim.new(1, 0)
+
+local StatusText = Instance.new("TextLabel")
+StatusText.Size = UDim2.new(1, -22, 1, 0)
+StatusText.Position = UDim2.new(0, 20, 0, 0)
+StatusText.BackgroundTransparency = 1
+StatusText.Text = "Idle"
+StatusText.TextColor3 = Color3.fromRGB(100, 100, 110)
+StatusText.Font = Enum.Font.Gotham
+StatusText.TextSize = 10
+StatusText.TextXAlignment = Enum.TextXAlignment.Left
+StatusText.Parent = StatusBar
+
+UpdateUILayout = function()
+    local currentY = 50
+    local spacing = 8
+
+    for _, item in ipairs(UIItems) do
+        if item.isSubToggle then
+            if Settings[item.parentKey] then
+                item.frame.Visible = true
+                item.frame.Size = UDim2.new(0.85, 0, 0, item.height)
+                item.frame.Position = UDim2.new(0.1, 0, 0, currentY)
+                currentY = currentY + item.height + spacing
+            else
+                item.frame.Visible = false
+            end
+        else
+            item.frame.Visible = true
+            item.frame.Size = UDim2.new(0.9, 0, 0, item.height)
+            item.frame.Position = UDim2.new(0.05, 0, 0, currentY)
+            currentY = currentY + item.height + spacing
+        end
+    end
+
+    KeybindFrame.Size = UDim2.new(0.9, 0, 0, 36)
+    KeybindFrame.Position = UDim2.new(0.05, 0, 0, currentY)
+    currentY = currentY + 36 + spacing
+
+    Divider2.Position = UDim2.new(0.05, 0, 0, currentY)
+    currentY = currentY + 11
+    ManualBtn.Position = UDim2.new(0.05, 0, 0, currentY)
+    currentY = currentY + 40 + 11
+    StatusBar.Position = UDim2.new(0.05, 0, 0, currentY)
+    currentY = currentY + 24 + 11
+
+    Main.Size = UDim2.new(0, 270, 0, currentY)
+end
+
+-- Status update loop
+task.spawn(function()
+    while Main.Parent do
+        local PS = getgenv().PrioritySystem
+        if PS and PS.SelectedData and PS.SelectedData.name then
+            PriorityStatus.Text = "→ " .. PS.SelectedData.name
+            PriorityStatus.TextColor3 = Color3.fromRGB(100, 200, 100)
+        else
+            PriorityStatus.Text = "No target"
+            PriorityStatus.TextColor3 = Color3.fromRGB(100, 100, 110)
+        end
+        
+        if isRunning then
+            StatusText.Text = "Running"
+            StatusDot.BackgroundColor3 = Color3.fromRGB(180, 180, 190)
+        elseif swapMonitorActive then
+            StatusText.Text = "Waiting Swap..."
+            StatusDot.BackgroundColor3 = Color3.fromRGB(255, 200, 100)
+        elseif isFloating then
+            StatusText.Text = "Floating..."
+            StatusDot.BackgroundColor3 = Color3.fromRGB(100, 200, 255)
+        else
+            StatusText.Text = "Idle"
+            StatusDot.BackgroundColor3 = Color3.fromRGB(100, 100, 110)
+        end
+        task.wait(0.1)
+    end
+end)
+
+local TpBrainrotKeyCode = Enum.KeyCode[Settings.TpToBrainrotKey] or Enum.KeyCode.G
+local waitingForKeybind = false
+
+KeybindButton.MouseButton1Click:Connect(function()
+    waitingForKeybind = true
+    KeybindButton.Text = "Press..."
+end)
+
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+
+    if waitingForKeybind and input.UserInputType == Enum.UserInputType.Keyboard then
+        waitingForKeybind = false
+        local keyName = input.KeyCode.Name
+        if keyName and keyName ~= "Unknown" then
+            Settings.TpToBrainrotKey = keyName
+            TpBrainrotKeyCode = input.KeyCode
+            KeybindButton.Text = keyName
+            SaveSettings()
+        else
+            KeybindButton.Text = Settings.TpToBrainrotKey or "G"
+        end
+        return
+    end
+
+    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+
+    if input.KeyCode == Enum.KeyCode.T then
+        task.spawn(function() ExecuteFlow(false) end)
+    elseif input.KeyCode == TpBrainrotKeyCode then
+        TeleportToBrainrot()
+    end
+end)
+
+UpdateUILayout()
+
+-- Drag
+local dragging, dragStart, startPos
+Main.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = i.Position
+        startPos = Main.Position
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+        Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+UserInputService.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+-- ==================== AUTO TELEPORT ON SCRIPT START ====================
+task.spawn(function()
+    -- Wait for character to be ready
+    local char = LP.Character or LP.CharacterAdded:Wait()
+    local hrp = char:WaitForChild("HumanoidRootPart", 10)
+    local hum = char:WaitForChild("Humanoid", 10)
+    
+    if not hrp or not hum then return end
+    
+    -- Small delay to let everything load
+    task.wait(1)
+    
+    -- Check if AutoTp is enabled
+    if Settings.AutoTp then
+        -- Get the target to show in notification
+        local _, _, _, petName = GetBestTarget(true)
+        
+        if petName then
+            -- Execute with notification
+            ExecuteFlow(true)
+        end
+    end
+end)
