@@ -114,17 +114,11 @@ local function GetPriorityTarget()
     if not selectedData.plot or not selectedData.slot then return nil, nil, nil end
     
     local model = nil
-    if PS.GetSelectedModel then
-        model = PS.GetSelectedModel()
-    end
-    if not model then
-        model = PS.SelectedModel
-    end
+    if PS.GetSelectedModel then model = PS.GetSelectedModel() end
+    if not model then model = PS.SelectedModel end
     
     local pos = nil
-    if PS.GetWorldPosition then
-        pos = PS.GetWorldPosition()
-    end
+    if PS.GetWorldPosition then pos = PS.GetWorldPosition() end
     
     if not pos and model then
         local root = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
@@ -164,11 +158,8 @@ end
 local function GetBestTarget(needBase)
     local pModel, pPos, pName = GetPriorityTarget()
     if pPos then
-        if needBase then
-            return pModel, pPos, GetNearestBase(pPos), pName
-        else
-            return pModel, pPos, nil, pName
-        end
+        if needBase then return pModel, pPos, GetNearestBase(pPos), pName
+        else return pModel, pPos, nil, pName end
     end
     
     local bestModel, bestValue, bestPos, bestName = nil, -1, nil, nil
@@ -196,9 +187,7 @@ local function GetBestTarget(needBase)
     end
 
     if not bestPos then return nil, nil, nil, nil end
-    if needBase then
-        return bestModel, bestPos, GetNearestBase(bestPos), bestName
-    end
+    if needBase then return bestModel, bestPos, GetNearestBase(bestPos), bestName end
     return bestModel, bestPos, nil, bestName
 end
 
@@ -312,16 +301,12 @@ local function ShowNotification(brainrotName)
     NotifFrame.BackgroundTransparency = 0
     NotifText.Text = brainrotName .. " detected!"
     NotifText.TextTransparency = 0
-    
     PlayNotificationSound()
     
-    -- Pulsing animation for 4 seconds
     task.spawn(function()
         local startTime = tick()
         local duration = 4
-        
         while tick() - startTime < duration do
-            -- Pulse from white to gray
             for i = 0, 1, 0.05 do
                 if not NotifFrame.Visible then break end
                 local brightness = 1 - (math.sin(i * math.pi) * 0.4)
@@ -329,14 +314,11 @@ local function ShowNotification(brainrotName)
                 task.wait(0.03)
             end
         end
-        
-        -- Fade out
         for i = 0, 1, 0.05 do
             NotifFrame.BackgroundTransparency = i
             NotifText.TextTransparency = i
             task.wait(0.02)
         end
-        
         NotifFrame.Visible = false
     end)
 end
@@ -447,7 +429,6 @@ local function ExecuteFlow(showNotification)
         local model, petPos, targetBase, petName = GetBestTarget(true)
         if not targetBase then isRunning = false return end
 
-        -- Show notification if requested
         if showNotification and petName then
             ShowNotification(petName)
         end
@@ -569,14 +550,14 @@ RunService.Heartbeat:Connect(function()
 end)
 
 -- ==================== GUI ====================
-local parent = LP:WaitForChild("PlayerGui")
-if parent:FindFirstChild("TPPanel_Clean") then parent.TPPanel_Clean:Destroy() end
+local parentUI = LP:WaitForChild("PlayerGui")
+if parentUI:FindFirstChild("TPPanel_Clean") then parentUI.TPPanel_Clean:Destroy() end
 
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "TPPanel_Clean"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-ScreenGui.Parent = parent
+ScreenGui.Parent = parentUI
 
 local Main = Instance.new("Frame")
 Main.Name = "Main"
@@ -610,10 +591,11 @@ PriorityStatus.TextSize = 9
 PriorityStatus.TextXAlignment = Enum.TextXAlignment.Right
 PriorityStatus.Parent = Main
 
-Instance.new("Frame", Main).Size = UDim2.new(0.9, 0, 0, 1)
-Main:FindFirstChildOfClass("Frame").Position = UDim2.new(0.05, 0, 0, 40)
-Main:FindFirstChildOfClass("Frame").BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-Main:FindFirstChildOfClass("Frame").BorderSizePixel = 0
+local DivM = Instance.new("Frame", Main)
+DivM.Size = UDim2.new(0.9, 0, 0, 1)
+DivM.Position = UDim2.new(0.05, 0, 0, 40)
+DivM.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+DivM.BorderSizePixel = 0
 
 local UIItems = {}
 local UpdateUILayout
@@ -677,14 +659,7 @@ local function CreateToggle(name, settingKey, isSubToggle, parentKey)
         UpdateUILayout()
     end)
 
-    table.insert(UIItems, {
-        frame = holder,
-        isSubToggle = isSubToggle,
-        parentKey = parentKey,
-        height = isSubToggle and 30 or 36,
-        settingKey = settingKey
-    })
-
+    table.insert(UIItems, {frame = holder, isSubToggle = isSubToggle, parentKey = parentKey, height = isSubToggle and 30 or 36, settingKey = settingKey})
     return holder
 end
 
@@ -815,7 +790,6 @@ UpdateUILayout = function()
     Main.Size = UDim2.new(0, 270, 0, currentY)
 end
 
--- Status update loop
 task.spawn(function()
     while Main.Parent do
         local PS = getgenv().PrioritySystem
@@ -880,7 +854,6 @@ end)
 
 UpdateUILayout()
 
--- Drag
 local dragging, dragStart, startPos
 Main.InputBegan:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
@@ -903,23 +876,16 @@ end)
 
 -- ==================== AUTO TELEPORT ON SCRIPT START ====================
 task.spawn(function()
-    -- Wait for character to be ready
     local char = LP.Character or LP.CharacterAdded:Wait()
     local hrp = char:WaitForChild("HumanoidRootPart", 10)
     local hum = char:WaitForChild("Humanoid", 10)
     
     if not hrp or not hum then return end
-    
-    -- Small delay to let everything load
     task.wait(1)
     
-    -- Check if AutoTp is enabled
     if Settings.AutoTp then
-        -- Get the target to show in notification
         local _, _, _, petName = GetBestTarget(true)
-        
         if petName then
-            -- Execute with notification
             ExecuteFlow(true)
         end
     end
