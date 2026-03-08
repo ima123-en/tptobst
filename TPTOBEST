@@ -10,7 +10,7 @@ local HttpService = game:GetService("HttpService")
 local SoundService = game:GetService("SoundService")
 local LP = Players.LocalPlayer
 
-local HIP_HEIGHT_VAL = 20
+local HIP_HEIGHT_VAL = 25
 local TOOL_NAME = "Quantum Cloner"
 local CARPET_NAME = "Flying Carpet"
 
