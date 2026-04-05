@@ -604,24 +604,18 @@ local function ExecuteFlow(showNotification, isManual)
             local skipClone = false
 
             if isSecondFloor then
-                -- HIGH BASE: Wand ist IMMER da.
-                walkForward(0.4)
-                task.wait(0.4)
+                walkForward(0.3)
+                task.wait(0.35)
                 if not IsAlive() then isRunning = false; isTpMoving = false; return end
                 skipClone = false
             else
-                -- LOW BASE: Wir testen ob eine Wand da ist (0.6s laufen)
                 local posBeforeWalk = HRP.Position
-                walkForward(0.6)
-                task.wait(0.65)
+                walkForward(0.5)
+                task.wait(0.55)
                 if not IsAlive() then isRunning = false; isTpMoving = false; return end
                 
                 local walkedDist = (HRP.Position - posBeforeWalk).Magnitude
-                if walkedDist > 7 then
-                    skipClone = true -- Wand offen -> Klon überspringen
-                else
-                    skipClone = false -- Wand zu -> Klonen!
-                end
+                if walkedDist > 7 then skipClone = true else skipClone = false end
             end
 
             if not skipClone then
@@ -629,127 +623,73 @@ local function ExecuteFlow(showNotification, isManual)
 
                 if tool then
                     Hum:EquipTool(tool)
-                    task.wait(0.5)
+                    task.wait(0.05)
                     if not IsAlive() then isRunning = false; isTpMoving = false; return end
                     
-                    -- Klon spawnen (Sicherheits-Upgrade: Wir benutzen das interne Activate UND die Maus)
                     pcall(function() tool:Activate() end)
-                    task.wait(0.1)
-                    
                     local cam = workspace.CurrentCamera
-                    local centerX = cam.ViewportSize.X / 2
-                    local centerY = cam.ViewportSize.Y / 2
+                    local centerX, centerY = cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2
                     VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 1)
-                    task.wait(0.05)
                     VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 1)
                     
                     usedClone = true
                     
                     local PlayerGui = LP:WaitForChild("PlayerGui")
-                    local toolsFrames = PlayerGui:WaitForChild("ToolsFrames", 5)
+                    local toolsFrames = PlayerGui:WaitForChild("ToolsFrames", 2)
                     
                     if toolsFrames and IsAlive() then
-                        local qcFrame = toolsFrames:WaitForChild("QuantumCloner", 5)
+                        local qcFrame = toolsFrames:WaitForChild("QuantumCloner", 2)
                         if qcFrame and IsAlive() then
-                            local tpButton = qcFrame:WaitForChild("TeleportToClone", 5)
+                            local tpButton = qcFrame:WaitForChild("TeleportToClone", 2)
                             
                             if tpButton then
-                                -- WARTE AUF SICHTBARKEIT (Max 5s)
-                                local waitUI = tick() + 5
-                                while tick() < waitUI do
-                                    if not IsAlive() then return end
-                                    if tpButton.Visible and tpButton.AbsoluteSize.X > 0 then break end
-                                    task.wait(0.1)
-                                end
+                                local preSwapPos = HRP.Position
+                                local clickTimeout = tick() + 2
                                 
-                                if tpButton.Visible and tpButton.AbsoluteSize.X > 0 then
-                                    -- WARTE BIS ANIMATION STOPPT
-                                    local lastPos = tpButton.AbsolutePosition
-                                    local stableCount = 0
-                                    for i = 1, 40 do
-                                        if not IsAlive() or not tpButton.Visible then break end
-                                        task.wait(0.05)
-                                        local currentPos = tpButton.AbsolutePosition
-                                        if (currentPos - lastPos).Magnitude < 1 then
-                                            stableCount = stableCount + 1
-                                            if stableCount >= 3 then break end
-                                        else
-                                            stableCount = 0
-                                        end
-                                        lastPos = currentPos
-                                    end
-
-                                    local preSwapPos = HRP.Position
+                                while tick() < clickTimeout do
+                                    if not IsAlive() then break end
                                     
-                                    -- AGGRESSIVER SPAM LOOP FÜR DEN SWAP (Macht garantiert den Klick!)
-                                    local clickTimeout = tick() + 3 -- 3 Sekunden lang durchgehend spammen
-                                    while tick() < clickTimeout do
-                                        if not IsAlive() then break end
-                                        
-                                        -- Haben wir uns schon weg-teleportiert?
-                                        if (HRP.Position - preSwapPos).Magnitude > 2 then
-                                            didSwapInFlow = true
-                                            break
+                                    if (HRP.Position - preSwapPos).Magnitude > 2 then
+                                        didSwapInFlow = true
+                                        break
+                                    end
+                                    
+                                    pcall(function()
+                                        if firesignal then
+                                            firesignal(tpButton.Activated)
+                                            firesignal(tpButton.MouseButton1Click)
                                         end
-                                        
-                                        -- Hat sich das Fenster geschlossen (Zeichen dass es geklappt hat)?
-                                        if not tpButton.Visible then
-                                            local waitServer = tick() + 1
-                                            while tick() < waitServer do
-                                                if (HRP.Position - preSwapPos).Magnitude > 2 then
-                                                    didSwapInFlow = true
-                                                    break
-                                                end
-                                                task.wait(0.05)
-                                            end
-                                            break
+                                        if getconnections then
+                                            for _, c in pairs(getconnections(tpButton.Activated)) do c:Fire() end
+                                            for _, c in pairs(getconnections(tpButton.MouseButton1Click)) do c:Fire() end
                                         end
-                                        
-                                        -- Position berechnen
+                                    end)
+                                    
+                                    if tpButton.Visible and tpButton.AbsoluteSize.X > 0 then
                                         local absPos = tpButton.AbsolutePosition
                                         local absSize = tpButton.AbsoluteSize
                                         local inset = game:GetService("GuiService"):GetGuiInset()
-                                        local clickX = absPos.X + (absSize.X / 2)
-                                        local clickY = absPos.Y + (absSize.Y / 2) + inset.Y
-                                        
-                                        -- 1. Versuch: VIM Klick
-                                        VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, true, game, 1)
-                                        task.wait(0.02)
-                                        VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, false, game, 1)
-                                        
-                                        -- 2. Versuch: Interne Signale (Parallel)
-                                        pcall(function()
-                                            if firesignal then
-                                                firesignal(tpButton.Activated)
-                                                firesignal(tpButton.MouseButton1Click)
-                                            end
-                                            if getconnections then
-                                                for _, c in pairs(getconnections(tpButton.Activated)) do c:Fire() end
-                                                for _, c in pairs(getconnections(tpButton.MouseButton1Click)) do c:Fire() end
-                                            end
-                                        end)
-                                        
-                                        task.wait(0.1) -- Kurz warten und direkt wieder feuern
+                                        VirtualInputManager:SendMouseButtonEvent(absPos.X + (absSize.X/2), absPos.Y + (absSize.Y/2) + inset.Y, 0, true, game, 1)
+                                        VirtualInputManager:SendMouseButtonEvent(absPos.X + (absSize.X/2), absPos.Y + (absSize.Y/2) + inset.Y, 0, false, game, 1)
                                     end
+                                    
+                                    task.wait(0.02)
+                                end
 
-                                    -- NACH ERFOLGREICHEM SWAP: 0.4s WAIT (wie gewünscht) UND STABILISIERUNG
-                                    if didSwapInFlow then
-                                        Equip(CARPET_NAME)
-                                        
-                                        task.wait(0.4) -- EXAKT 0.4 SEKUNDEN WARTEN!
-                                        
-                                        if not IsAlive() then isRunning = false; isTpMoving = false; return end
-                                        
-                                        local currentPos = HRP.Position
-                                        HRP.CFrame = CFrame.new(Vector3.new(currentPos.X, savedYPosition, currentPos.Z))
-                                        HRP.AssemblyLinearVelocity = Vector3.zero
-                                        HRP.AssemblyAngularVelocity = Vector3.zero
-                                        
-                                        HRP.Anchored = true
-                                        task.wait(0.1)
-                                        if not IsAlive() then isRunning = false; isTpMoving = false; return end
-                                        HRP.Anchored = false
-                                    end
+                                if didSwapInFlow then
+                                    Equip(CARPET_NAME)
+                                    task.wait(0.1)
+                                    if not IsAlive() then isRunning = false; isTpMoving = false; return end
+                                    
+                                    local currentPos = HRP.Position
+                                    HRP.CFrame = CFrame.new(Vector3.new(currentPos.X, savedYPosition, currentPos.Z))
+                                    HRP.AssemblyLinearVelocity = Vector3.zero
+                                    HRP.AssemblyAngularVelocity = Vector3.zero
+                                    
+                                    HRP.Anchored = true
+                                    task.wait(0.05)
+                                    if not IsAlive() then isRunning = false; isTpMoving = false; return end
+                                    HRP.Anchored = false
                                 end
                             end
                         end
@@ -758,7 +698,6 @@ local function ExecuteFlow(showNotification, isManual)
             end
         end
 
-        -- Teppich equippen (falls oben geskippt)
         if not didSwapInFlow then
             Equip(CARPET_NAME)
             task.wait(0.1)
@@ -955,6 +894,29 @@ ManualBtn.MouseEnter:Connect(function() TweenService:Create(ManualBtn, TweenInfo
 ManualBtn.MouseLeave:Connect(function() TweenService:Create(ManualBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(25, 25, 30)}):Play() end)
 ManualBtn.MouseButton1Click:Connect(function() task.spawn(function() ExecuteFlow(false, true) end) end)
 
+local StabilizeBtn = Instance.new("TextButton")
+StabilizeBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+StabilizeBtn.Text = "Stabilize"
+StabilizeBtn.TextColor3 = Color3.fromRGB(190, 190, 200)
+StabilizeBtn.Font = Enum.Font.GothamBold
+StabilizeBtn.TextSize = 13
+StabilizeBtn.AutoButtonColor = false
+StabilizeBtn.BorderSizePixel = 0
+StabilizeBtn.Size = UDim2.new(0.9, 0, 0, 40)
+StabilizeBtn.Parent = Main
+Instance.new("UICorner", StabilizeBtn).CornerRadius = UDim.new(0, 8)
+Instance.new("UIStroke", StabilizeBtn).Color = Color3.fromRGB(40, 40, 48)
+
+StabilizeBtn.MouseEnter:Connect(function() TweenService:Create(StabilizeBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(35, 35, 42)}):Play() end)
+StabilizeBtn.MouseLeave:Connect(function() TweenService:Create(StabilizeBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(25, 25, 30)}):Play() end)
+StabilizeBtn.MouseButton1Click:Connect(function()
+    task.spawn(function()
+        pcall(function()
+            loadstring(game:HttpGet("https://raw.githubusercontent.com/judos887o/desync-schmeckt/refs/heads/main/teat"))()
+        end)
+    end)
+end)
+
 local StatusBar = Instance.new("Frame")
 StatusBar.BackgroundColor3 = Color3.fromRGB(16, 16, 19)
 StatusBar.BorderSizePixel = 0
@@ -1009,8 +971,13 @@ UpdateUILayout = function()
 
     Divider2.Position = UDim2.new(0.05, 0, 0, currentY)
     currentY = currentY + 11
+    
     ManualBtn.Position = UDim2.new(0.05, 0, 0, currentY)
     currentY = currentY + 40 + 11
+    
+    StabilizeBtn.Position = UDim2.new(0.05, 0, 0, currentY)
+    currentY = currentY + 40 + 11
+    
     StatusBar.Position = UDim2.new(0.05, 0, 0, currentY)
     currentY = currentY + 24 + 11
 
