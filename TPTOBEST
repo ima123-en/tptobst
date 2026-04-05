@@ -414,6 +414,7 @@ local function PerformVelocityFloat(targetPart, ignoreRagdoll)
 
     local targetY = petPos.Y
     local invisibleFloor = nil
+    local fConn = nil
 
     local floatStart = tick()
     while tick() - floatStart < 4 do
@@ -435,8 +436,24 @@ local function PerformVelocityFloat(targetPart, ignoreRagdoll)
             invisibleFloor.Position = hrp.Position - Vector3.new(0, 3.2, 0)
             invisibleFloor.Anchored = true
             invisibleFloor.Transparency = 1
-            invisibleFloor.CanCollide = true
+            invisibleFloor.CanCollide = false 
             invisibleFloor.Parent = Workspace
+            
+            fConn = RunService.RenderStepped:Connect(function()
+                if not invisibleFloor or not invisibleFloor.Parent then
+                    if fConn then fConn:Disconnect() end
+                    return
+                end
+                local tChar = LP.Character
+                local tHrp = tChar and tChar:FindFirstChild("HumanoidRootPart")
+                if tHrp then
+                    if tHrp.Position.Y > invisibleFloor.Position.Y + 1.5 then
+                        invisibleFloor.CanCollide = true
+                    else
+                        invisibleFloor.CanCollide = false
+                    end
+                end
+            end)
             break
         end
 
@@ -456,6 +473,7 @@ local function PerformVelocityFloat(targetPart, ignoreRagdoll)
                 end
                 task.wait(0.1)
             end
+            if fConn then fConn:Disconnect() end
             pcall(function() invisibleFloor:Destroy() end)
         end)
     end
@@ -675,10 +693,9 @@ local function ExecuteFlow(showNotification, isManual)
                     if not IsAlive() or IsRagdolled(Hum) then isRunning = false; isTpMoving = false; return end
                     
                     pcall(function() tool:Activate() end)
-                    local cam = workspace.CurrentCamera
-                    local centerX, centerY = cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2
-                    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 1)
-                    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 1)
+                    VirtualInputManager:SendMouseButtonEvent(10, 10, 0, true, game, 1)
+                    task.wait(0.02)
+                    VirtualInputManager:SendMouseButtonEvent(10, 10, 0, false, game, 1)
                     
                     usedClone = true
                     
@@ -702,26 +719,20 @@ local function ExecuteFlow(showNotification, isManual)
                                         break
                                     end
                                     
-                                    pcall(function()
-                                        if firesignal then
-                                            firesignal(tpButton.Activated)
-                                            firesignal(tpButton.MouseButton1Click)
-                                        end
-                                        if getconnections then
-                                            for _, c in pairs(getconnections(tpButton.Activated)) do c:Fire() end
-                                            for _, c in pairs(getconnections(tpButton.MouseButton1Click)) do c:Fire() end
-                                        end
-                                    end)
-                                    
                                     if tpButton.Visible and tpButton.AbsoluteSize.X > 0 then
                                         local absPos = tpButton.AbsolutePosition
                                         local absSize = tpButton.AbsoluteSize
                                         local inset = game:GetService("GuiService"):GetGuiInset()
-                                        VirtualInputManager:SendMouseButtonEvent(absPos.X + (absSize.X/2), absPos.Y + (absSize.Y/2) + inset.Y, 0, true, game, 1)
-                                        VirtualInputManager:SendMouseButtonEvent(absPos.X + (absSize.X/2), absPos.Y + (absSize.Y/2) + inset.Y, 0, false, game, 1)
+                                        local clickX = absPos.X + (absSize.X / 2)
+                                        local clickY = absPos.Y + (absSize.Y / 2) + inset.Y
+                                        
+                                        VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, true, game, 1)
+                                        task.wait(0.01)
+                                        VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, false, game, 1)
+                                        task.wait(0.01)
+                                    else
+                                        RunService.RenderStepped:Wait()
                                     end
-                                    
-                                    task.wait(0.02)
                                 end
 
                                 if didSwapInFlow then
