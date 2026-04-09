@@ -109,7 +109,10 @@ end
 local function IsRagdolled(humanoid)
     if not humanoid then return true end
     local state = humanoid:GetState()
-    return state == Enum.HumanoidStateType.Ragdoll or state == Enum.HumanoidStateType.Physics or state == Enum.HumanoidStateType.FallingDown or state == Enum.HumanoidStateType.Dead
+    return state == Enum.HumanoidStateType.Ragdoll
+        or state == Enum.HumanoidStateType.Physics
+        or state == Enum.HumanoidStateType.FallingDown
+        or state == Enum.HumanoidStateType.Dead
 end
 
 local function IsUnderRoof()
@@ -122,11 +125,7 @@ local function IsUnderRoof()
     params.FilterType = Enum.RaycastFilterType.Exclude
 
     local ray = Workspace:Raycast(hrp.Position, Vector3.new(0, 100, 0), params)
-    
-    if ray and ray.Instance and ray.Instance.CanCollide then
-        return true
-    end
-    return false
+    return ray and ray.Instance and ray.Instance.CanCollide or false
 end
 
 local function getClosestBaseIdx(pos)
@@ -217,9 +216,7 @@ local function scanPlots()
             local ch = Synchronizer:Get(plot.Name)
             local al = ch and ch:Get("AnimalList")
             local owner = ch and ch:Get("Owner")
-            
-            if owner and owner.Name == LP.Name then return end 
-
+            if owner and owner.Name == LP.Name then return end
             if owner and al then
                 for slot, ad in pairs(al) do
                     if type(ad) == "table" and ad.Index then
@@ -303,41 +300,57 @@ local LastRagdollTime = 0
 local RagdollCooldown = 0.5
 local AllowTpAfterRagdoll = false
 
-local TeleportToBrainrot 
+local TeleportToBrainrot
+
+-- zentrale Hit-Handler-Funktion
+local function TriggerTpAfterHit()
+    if not Settings.TpAfterHit then return end
+    if not AllowTpAfterRagdoll then return end
+    if isRunning or swapMonitorActive or isTpMoving then return end
+    if not IsAlive() then return end
+
+    local now = tick()
+    if now - LastRagdollTime < RagdollCooldown then return end
+    LastRagdollTime = now
+
+    task.delay(0.15, function()
+        if not IsAlive() then return end
+        local h = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+        if h and IsRagdolled(h) then
+            pcall(function() h:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+        end
+        TeleportToBrainrot(true)
+    end)
+end
 
 local function OnCharacterSpawn(char)
     LastRagdollTime = 0
     AllowTpAfterRagdoll = false
     local hum = char:WaitForChild("Humanoid", 5)
     if hum then 
-        savedHipHeight = hum.HipHeight 
-        
+        savedHipHeight = hum.HipHeight
         hum.StateChanged:Connect(function(old, new)
-            if not Settings.TpAfterHit then return end
-            if not AllowTpAfterRagdoll then return end
-            if isRunning or swapMonitorActive then return end
-            
-            if new == Enum.HumanoidStateType.Ragdoll or new == Enum.HumanoidStateType.FallingDown or new == Enum.HumanoidStateType.Physics then
-                local now = tick()
-                if now - LastRagdollTime >= RagdollCooldown then
-                    LastRagdollTime = now
-                    
-                    task.delay(0.15, function()
-                        if not IsAlive() then return end
-                        local h = LP.Character:FindFirstChild("Humanoid")
-                        if h and IsRagdolled(h) then
-                            pcall(function() h:ChangeState(Enum.HumanoidStateType.GettingUp) end)
-                        end
-                        TeleportToBrainrot(true) 
-                    end)
-                end
+            -- Fallback, falls Ragdoll-State kurz sichtbar ist
+            if new == Enum.HumanoidStateType.Ragdoll
+            or new == Enum.HumanoidStateType.FallingDown
+            or new == Enum.HumanoidStateType.Physics then
+                TriggerTpAfterHit()
             end
         end)
     end
-    task.delay(1.5, function() if LP.Character == char then AllowTpAfterRagdoll = true end end)
+    task.delay(1.5, function()
+        if LP.Character == char then
+            AllowTpAfterRagdoll = true
+        end
+    end)
 end
 LP.CharacterAdded:Connect(OnCharacterSpawn)
 if LP.Character then OnCharacterSpawn(LP.Character) end
+
+-- zusätzlich: auf RagdollEndTime reagieren (Anti-Ragdoll V2)
+LP:GetAttributeChangedSignal("RagdollEndTime"):Connect(function()
+    TriggerTpAfterHit()
+end)
 
 local NotificationGui = Instance.new("ScreenGui")
 NotificationGui.Name = "TPNotification"
@@ -383,7 +396,11 @@ local function ShowNotification(text, customColor)
                 task.wait(0.03)
             end
         end
-        for i = 0, 1, 0.05 do NotifFrame.BackgroundTransparency = i NotifText.TextTransparency = i task.wait(0.02) end
+        for i = 0, 1, 0.05 do
+            NotifFrame.BackgroundTransparency = i
+            NotifText.TextTransparency = i
+            task.wait(0.02)
+        end
         NotifFrame.Visible = false
     end)
 end
@@ -394,7 +411,6 @@ local function PerformVelocityFloat(targetPart, ignoreRagdoll)
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if not hrp or not targetPart or not hum then return end
-
     if not ignoreRagdoll and IsRagdolled(hum) then return end
 
     getgenv().SMKT_DISABLE_VELOCITY = true
@@ -405,16 +421,16 @@ local function PerformVelocityFloat(targetPart, ignoreRagdoll)
     hrp.CFrame = CFrame.new(Vector3.new(petPos.X, startY, petPos.Z))
     task.wait(0.1)
     if not IsAlive() or (not ignoreRagdoll and IsRagdolled(hum)) then 
-        getgenv().SMKT_DISABLE_VELOCITY = false; return 
+        getgenv().SMKT_DISABLE_VELOCITY = false
+        return 
     end
 
-    local raycastParams = RaycastParams.new()
-    raycastParams.FilterDescendantsInstances = {char, Workspace.CurrentCamera}
-    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = {char, Workspace.CurrentCamera}
+    params.FilterType = Enum.RaycastFilterType.Exclude
 
     local targetY = petPos.Y
-    local invisibleFloor = nil
-    local fConn = nil
+    local invisibleFloor, fConn
 
     local floatStart = tick()
     while tick() - floatStart < 4 do
@@ -427,7 +443,7 @@ local function PerformVelocityFloat(targetPart, ignoreRagdoll)
         end
 
         local head = char:FindFirstChild("Head") or hrp
-        local ray = Workspace:Raycast(head.Position, Vector3.new(0, 3, 0), raycastParams)
+        local ray = Workspace:Raycast(head.Position, Vector3.new(0, 3, 0), params)
 
         if ray and ray.Instance and ray.Instance.CanCollide then
             hrp.AssemblyLinearVelocity = Vector3.zero
@@ -447,11 +463,7 @@ local function PerformVelocityFloat(targetPart, ignoreRagdoll)
                 local tChar = LP.Character
                 local tHrp = tChar and tChar:FindFirstChild("HumanoidRootPart")
                 if tHrp then
-                    if tHrp.Position.Y > invisibleFloor.Position.Y + 1.5 then
-                        invisibleFloor.CanCollide = true
-                    else
-                        invisibleFloor.CanCollide = false
-                    end
+                    invisibleFloor.CanCollide = tHrp.Position.Y > invisibleFloor.Position.Y + 1.5
                 end
             end)
             break
@@ -485,7 +497,6 @@ TeleportToBrainrot = function(ignoreRagdoll)
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if not hrp or not hum then return end
-    
     if not ignoreRagdoll and IsRagdolled(hum) then return end
     if IsHoldingBrainrot() or LP:GetAttribute("Stealing") then return end
 
@@ -530,7 +541,6 @@ local function StartSwapMonitor()
         while swapMonitorActive and tick() < timeout do
             task.wait(0.05)
             if not IsAlive() then swapMonitorActive = false return end
-            
             char = LP.Character
             hrp = char and char:FindFirstChild("HumanoidRootPart")
             if not hrp then break end
@@ -538,7 +548,6 @@ local function StartSwapMonitor()
             local dist = (hrp.Position - posBeforeSwap).Magnitude
             if dist > 5 then
                 swapMonitorActive = false
-                
                 local currentPos = hrp.Position
                 hrp.CFrame = CFrame.new(Vector3.new(currentPos.X, savedYPosition, currentPos.Z))
                 hrp.AssemblyLinearVelocity = Vector3.zero
@@ -547,7 +556,6 @@ local function StartSwapMonitor()
                 task.wait(0.3) 
                 if not IsAlive() then return end
                 hrp.Anchored = false
-                
                 TeleportToBrainrot()
                 return
             end
@@ -558,7 +566,6 @@ end
 
 local function ExecuteFlow(showNotification, isManual)
     if isRunning or isTpMoving then return end
-
     if not IsAlive() then return end
 
     local Char = LP.Character
@@ -605,7 +612,6 @@ local function ExecuteFlow(showNotification, isManual)
         
         local minHeight = 50
         local targetHeight = math.max(targetBasePos.Y, minHeight)
-
         savedYPosition = targetHeight  
 
         getgenv().SMKT_DISABLE_VELOCITY = true
@@ -681,12 +687,11 @@ local function ExecuteFlow(showNotification, isManual)
                 if not IsAlive() or IsRagdolled(Hum) then isRunning = false; isTpMoving = false; return end
                 
                 local walkedDist = (HRP.Position - posBeforeWalk).Magnitude
-                if walkedDist > 7 then skipClone = true else skipClone = false end
+                skipClone = walkedDist > 7
             end
 
             if not skipClone then
                 local tool = LP.Backpack:FindFirstChild("Quantum Cloner") or Char:FindFirstChild("Quantum Cloner")
-
                 if tool then
                     Hum:EquipTool(tool)
                     task.wait(0.05)
@@ -701,31 +706,25 @@ local function ExecuteFlow(showNotification, isManual)
                     
                     local PlayerGui = LP:WaitForChild("PlayerGui")
                     local toolsFrames = PlayerGui:WaitForChild("ToolsFrames", 2)
-                    
                     if toolsFrames and IsAlive() and not IsRagdolled(Hum) then
                         local qcFrame = toolsFrames:WaitForChild("QuantumCloner", 2)
                         if qcFrame and IsAlive() and not IsRagdolled(Hum) then
                             local tpButton = qcFrame:WaitForChild("TeleportToClone", 2)
-                            
                             if tpButton then
                                 local preSwapPos = HRP.Position
                                 local clickTimeout = tick() + 2
-                                
                                 while tick() < clickTimeout do
                                     if not IsAlive() or IsRagdolled(Hum) then break end
-                                    
                                     if (HRP.Position - preSwapPos).Magnitude > 2 then
                                         didSwapInFlow = true
                                         break
                                     end
-                                    
                                     if tpButton.Visible and tpButton.AbsoluteSize.X > 0 then
                                         local absPos = tpButton.AbsolutePosition
                                         local absSize = tpButton.AbsoluteSize
                                         local inset = game:GetService("GuiService"):GetGuiInset()
                                         local clickX = absPos.X + (absSize.X / 2)
                                         local clickY = absPos.Y + (absSize.Y / 2) + inset.Y
-                                        
                                         VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, true, game, 1)
                                         task.wait(0.01)
                                         VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, false, game, 1)
@@ -734,17 +733,14 @@ local function ExecuteFlow(showNotification, isManual)
                                         RunService.RenderStepped:Wait()
                                     end
                                 end
-
                                 if didSwapInFlow then
                                     Equip(CARPET_NAME)
                                     task.wait(0.1)
                                     if not IsAlive() or IsRagdolled(Hum) then isRunning = false; isTpMoving = false; return end
-                                    
                                     local currentPos = HRP.Position
                                     HRP.CFrame = CFrame.new(Vector3.new(currentPos.X, savedYPosition, currentPos.Z))
                                     HRP.AssemblyLinearVelocity = Vector3.zero
                                     HRP.AssemblyAngularVelocity = Vector3.zero
-                                    
                                     HRP.Anchored = true
                                     task.wait(0.05)
                                     if not IsAlive() or IsRagdolled(Hum) then isRunning = false; isTpMoving = false; return end
@@ -868,13 +864,27 @@ local function CreateToggle(name, settingKey, isSubToggle, parentKey)
 
     local function updateVisual()
         if Settings[settingKey] then
-            TweenService:Create(circle, TweenInfo.new(0.2), {Position = UDim2.new(0, 22, 0.5, -8), BackgroundColor3 = Color3.fromRGB(200, 200, 210)}):Play()
-            TweenService:Create(toggleBg, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(55, 55, 65)}):Play()
-            TweenService:Create(label, TweenInfo.new(0.2), {TextColor3 = Color3.fromRGB(220, 220, 230)}):Play()
+            TweenService:Create(circle, TweenInfo.new(0.2), {
+                Position = UDim2.new(0, 22, 0.5, -8),
+                BackgroundColor3 = Color3.fromRGB(200, 200, 210)
+            }):Play()
+            TweenService:Create(toggleBg, TweenInfo.new(0.2), {
+                BackgroundColor3 = Color3.fromRGB(55, 55, 65)
+            }):Play()
+            TweenService:Create(label, TweenInfo.new(0.2), {
+                TextColor3 = Color3.fromRGB(220, 220, 230)
+            }):Play()
         else
-            TweenService:Create(circle, TweenInfo.new(0.2), {Position = UDim2.new(0, 2, 0.5, -8), BackgroundColor3 = Color3.fromRGB(80, 80, 90)}):Play()
-            TweenService:Create(toggleBg, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(35, 35, 40)}):Play()
-            TweenService:Create(label, TweenInfo.new(0.2), {TextColor3 = Color3.fromRGB(170, 170, 180)}):Play()
+            TweenService:Create(circle, TweenInfo.new(0.2), {
+                Position = UDim2.new(0, 2, 0.5, -8),
+                BackgroundColor3 = Color3.fromRGB(80, 80, 90)
+            }):Play()
+            TweenService:Create(toggleBg, TweenInfo.new(0.2), {
+                BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+            }):Play()
+            TweenService:Create(label, TweenInfo.new(0.2), {
+                TextColor3 = Color3.fromRGB(170, 170, 180)
+            }):Play()
         end
     end
     updateVisual()
@@ -886,7 +896,13 @@ local function CreateToggle(name, settingKey, isSubToggle, parentKey)
         UpdateUILayout()
     end)
 
-    table.insert(UIItems, {frame = holder, isSubToggle = isSubToggle, parentKey = parentKey, height = isSubToggle and 30 or 36, settingKey = settingKey})
+    table.insert(UIItems, {
+        frame = holder,
+        isSubToggle = isSubToggle,
+        parentKey = parentKey,
+        height = isSubToggle and 30 or 36,
+        settingKey = settingKey
+    })
     return holder
 end
 
@@ -949,9 +965,19 @@ ManualBtn.Parent = Main
 Instance.new("UICorner", ManualBtn).CornerRadius = UDim.new(0, 8)
 Instance.new("UIStroke", ManualBtn).Color = Color3.fromRGB(40, 40, 48)
 
-ManualBtn.MouseEnter:Connect(function() TweenService:Create(ManualBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(35, 35, 42)}):Play() end)
-ManualBtn.MouseLeave:Connect(function() TweenService:Create(ManualBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(25, 25, 30)}):Play() end)
-ManualBtn.MouseButton1Click:Connect(function() task.spawn(function() ExecuteFlow(false, true) end) end)
+ManualBtn.MouseEnter:Connect(function()
+    TweenService:Create(ManualBtn, TweenInfo.new(0.2), {
+        BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+    }):Play()
+end)
+ManualBtn.MouseLeave:Connect(function()
+    TweenService:Create(ManualBtn, TweenInfo.new(0.2), {
+        BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    }):Play()
+end)
+ManualBtn.MouseButton1Click:Connect(function()
+    task.spawn(function() ExecuteFlow(false, true) end)
+end)
 
 local StabilizeBtn = Instance.new("TextButton")
 StabilizeBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
@@ -966,8 +992,16 @@ StabilizeBtn.Parent = Main
 Instance.new("UICorner", StabilizeBtn).CornerRadius = UDim.new(0, 8)
 Instance.new("UIStroke", StabilizeBtn).Color = Color3.fromRGB(40, 40, 48)
 
-StabilizeBtn.MouseEnter:Connect(function() TweenService:Create(StabilizeBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(35, 35, 42)}):Play() end)
-StabilizeBtn.MouseLeave:Connect(function() TweenService:Create(StabilizeBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(25, 25, 30)}):Play() end)
+StabilizeBtn.MouseEnter:Connect(function()
+    TweenService:Create(StabilizeBtn, TweenInfo.new(0.2), {
+        BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+    }):Play()
+end)
+StabilizeBtn.MouseLeave:Connect(function()
+    TweenService:Create(StabilizeBtn, TweenInfo.new(0.2), {
+        BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    }):Play()
+end)
 StabilizeBtn.MouseButton1Click:Connect(function()
     task.spawn(function()
         pcall(function()
@@ -1046,7 +1080,6 @@ end
 task.spawn(function()
     while Main.Parent do
         scanPlots()
-        
         local PS = getgenv().PrioritySystem
         if PS and PS.SelectedData and PS.SelectedData.name then
             PriorityStatus.Text = "→ " .. PS.SelectedData.name
@@ -1083,7 +1116,6 @@ end)
 
 UserInputService.InputBegan:Connect(function(input, gpe)
     if gpe then return end
-
     if waitingForKeybind and input.UserInputType == Enum.UserInputType.Keyboard then
         waitingForKeybind = false
         local keyName = input.KeyCode.Name
@@ -1117,13 +1149,16 @@ Main.InputBegan:Connect(function(i)
     end
 end)
 UserInputService.InputChanged:Connect(function(input)
-    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch) then
         local delta = input.Position - dragStart
-        Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y)
     end
 end)
 UserInputService.InputEnded:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+    if i.UserInputType == Enum.UserInputType.MouseButton1
+        or i.UserInputType == Enum.UserInputType.Touch then
         dragging = false
     end
 end)
@@ -1132,10 +1167,8 @@ task.spawn(function()
     local char = LP.Character or LP.CharacterAdded:Wait()
     local hrp = char:WaitForChild("HumanoidRootPart", 10)
     local hum = char:WaitForChild("Humanoid", 10)
-    
     if not hrp or not hum then return end
     task.wait(1)
-    
     if Settings.AutoTp then
         local targetData, targetPart = GetBestTarget()
         if targetPart and targetData and targetData.name then
