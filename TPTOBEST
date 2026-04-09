@@ -62,7 +62,8 @@ local Settings = {
     AutoClone = true,
     TpToBrainrotAfter = false,
     TpAfterHit = false,
-    TpToBrainrotKey = "G"
+    TpToBrainrotKey = "G",
+    CloneMode = "Good" -- "Good" = firesignal, "Bad" = VirtualInput
 }
 
 local function SaveSettings()
@@ -302,82 +303,38 @@ local AllowTpAfterRagdoll = false
 
 local TeleportToBrainrot
 
--- zentrale Hit-Handler-Funktion
-local function TriggerTpAfterHit()
-    if not Settings.TpAfterHit then return end
-    if not AllowTpAfterRagdoll then return end
-    if isRunning or swapMonitorActive or isTpMoving then return end
-    if not IsAlive() then return end
-
-    local now = tick()
-    if now - LastRagdollTime < RagdollCooldown then return end
-    LastRagdollTime = now
-
-    task.delay(0.15, function()
-        if not IsAlive() then return end
-        local h = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
-        if h and IsRagdolled(h) then
-            pcall(function() h:ChangeState(Enum.HumanoidStateType.GettingUp) end)
-        end
-        TeleportToBrainrot(true)
-    end)
-end
-
-local function OnCharacterSpawn(char)
-    LastRagdollTime = 0
-    AllowTpAfterRagdoll = false
-    local hum = char:WaitForChild("Humanoid", 5)
-    if hum then 
-        savedHipHeight = hum.HipHeight
-        hum.StateChanged:Connect(function(old, new)
-            -- Fallback, falls Ragdoll-State kurz sichtbar ist
-            if new == Enum.HumanoidStateType.Ragdoll
-            or new == Enum.HumanoidStateType.FallingDown
-            or new == Enum.HumanoidStateType.Physics then
-                TriggerTpAfterHit()
-            end
-        end)
-    end
-    task.delay(1.5, function()
-        if LP.Character == char then
-            AllowTpAfterRagdoll = true
-        end
-    end)
-end
-LP.CharacterAdded:Connect(OnCharacterSpawn)
-if LP.Character then OnCharacterSpawn(LP.Character) end
-
--- zusätzlich: auf RagdollEndTime reagieren (Anti-Ragdoll V2)
-LP:GetAttributeChangedSignal("RagdollEndTime"):Connect(function()
-    TriggerTpAfterHit()
-end)
-
-local NotificationGui = Instance.new("ScreenGui")
-NotificationGui.Name = "TPNotification"
-NotificationGui.ResetOnSpawn = false
-NotificationGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-NotificationGui.DisplayOrder = 999
-NotificationGui.Parent = LP:WaitForChild("PlayerGui")
-
-local NotifFrame = Instance.new("Frame")
-NotifFrame.Size = UDim2.new(0, 350, 0, 70)
-NotifFrame.Position = UDim2.new(0.5, -175, 0.08, 0)
-NotifFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-NotifFrame.BorderSizePixel = 0
-NotifFrame.BackgroundTransparency = 1
-NotifFrame.Visible = false
-NotifFrame.Parent = NotificationGui
-Instance.new("UICorner", NotifFrame).CornerRadius = UDim.new(0, 12)
-
-local NotifText = Instance.new("TextLabel")
-NotifText.Size = UDim2.new(1, 0, 1, 0)
-NotifText.BackgroundTransparency = 1
-NotifText.TextColor3 = Color3.fromRGB(255, 255, 255)
-NotifText.Font = Enum.Font.GothamBold
-NotifText.TextSize = 22
-NotifText.Parent = NotifFrame
-
 local function ShowNotification(text, customColor)
+    local NotificationGui = LP.PlayerGui:FindFirstChild("TPNotification")
+    if not NotificationGui then
+        NotificationGui = Instance.new("ScreenGui")
+        NotificationGui.Name = "TPNotification"
+        NotificationGui.ResetOnSpawn = false
+        NotificationGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        NotificationGui.DisplayOrder = 999
+        NotificationGui.Parent = LP:WaitForChild("PlayerGui")
+        local frame = Instance.new("Frame")
+        frame.Name = "Frame"
+        frame.Size = UDim2.new(0, 350, 0, 70)
+        frame.Position = UDim2.new(0.5, -175, 0.08, 0)
+        frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+        frame.BorderSizePixel = 0
+        frame.BackgroundTransparency = 1
+        frame.Visible = false
+        frame.Parent = NotificationGui
+        Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
+        local label = Instance.new("TextLabel")
+        label.Name = "Text"
+        label.Size = UDim2.new(1, 0, 1, 0)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = Color3.fromRGB(255, 255, 255)
+        label.Font = Enum.Font.GothamBold
+        label.TextSize = 22
+        label.Parent = frame
+    end
+    local NotifFrame = NotificationGui:FindFirstChild("Frame")
+    local NotifText = NotifFrame and NotifFrame:FindFirstChild("Text")
+    if not NotifFrame or not NotifText then return end
+
     NotifFrame.Visible = true
     NotifFrame.BackgroundTransparency = 0
     NotifText.Text = text
@@ -436,7 +393,6 @@ local function PerformVelocityFloat(targetPart, ignoreRagdoll)
     while tick() - floatStart < 4 do
         if not IsAlive() or (not ignoreRagdoll and IsRagdolled(hum)) then break end 
         if IsHoldingBrainrot() or LP:GetAttribute("Stealing") then break end
-
         if hrp.Position.Y >= targetY then
             hrp.AssemblyLinearVelocity = Vector3.zero
             break
@@ -480,14 +436,35 @@ local function PerformVelocityFloat(targetPart, ignoreRagdoll)
         task.spawn(function()
             local timeout = tick() + 15
             while tick() < timeout do
-                if IsHoldingBrainrot() or LP:GetAttribute("Stealing") or not IsAlive() then
-                    break
-                end
+                if IsHoldingBrainrot() or LP:GetAttribute("Stealing") or not IsAlive() then break end
                 task.wait(0.1)
             end
             if fConn then fConn:Disconnect() end
             pcall(function() invisibleFloor:Destroy() end)
         end)
+    end
+end
+
+local function ClickTeleportToClone(tpButton)
+    if not tpButton then return end
+    tpButton.Visible = true
+
+    if Settings.CloneMode == "Good" and typeof(firesignal) == "function" then
+        pcall(function()
+            firesignal(tpButton.MouseButton1Click)
+            firesignal(tpButton.MouseButton1Up)
+            firesignal(tpButton.MouseButton1Down)
+        end)
+    else
+        local guiService = game:GetService("GuiService")
+        local inset = guiService:GetGuiInset()
+        local absPos = tpButton.AbsolutePosition
+        local absSize = tpButton.AbsoluteSize
+        local clickX = absPos.X + (absSize.X / 2) + inset.X
+        local clickY = absPos.Y + (absSize.Y / 2) + inset.Y
+        VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, true, game, 1)
+        task.wait(0.01)
+        VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, false, game, 1)
     end
 end
 
@@ -525,6 +502,51 @@ TeleportToBrainrot = function(ignoreRagdoll)
 
     if hum and IsAlive() then hum.HipHeight = savedHipHeight end
 end
+
+local function TriggerTpAfterHit()
+    if not Settings.TpAfterHit then return end
+    if not AllowTpAfterRagdoll then return end
+    if isRunning or swapMonitorActive or isTpMoving then return end
+    if not IsAlive() then return end
+
+    local now = tick()
+    if now - LastRagdollTime < RagdollCooldown then return end
+    LastRagdollTime = now
+
+    task.delay(0.15, function()
+        if not IsAlive() then return end
+        local h = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+        if h and IsRagdolled(h) then
+            pcall(function() h:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+        end
+        TeleportToBrainrot(true)
+    end)
+end
+
+local function OnCharacterSpawn(char)
+    LastRagdollTime = 0
+    AllowTpAfterRagdoll = false
+    local hum = char:WaitForChild("Humanoid", 5)
+    if hum then 
+        savedHipHeight = hum.HipHeight
+        hum.StateChanged:Connect(function(old, new)
+            if new == Enum.HumanoidStateType.Ragdoll
+            or new == Enum.HumanoidStateType.FallingDown
+            or new == Enum.HumanoidStateType.Physics then
+                TriggerTpAfterHit()
+            end
+        end)
+    end
+    task.delay(1.5, function()
+        if LP.Character == char then AllowTpAfterRagdoll = true end
+    end)
+end
+LP.CharacterAdded:Connect(OnCharacterSpawn)
+if LP.Character then OnCharacterSpawn(LP.Character) end
+
+LP:GetAttributeChangedSignal("RagdollEndTime"):Connect(function()
+    TriggerTpAfterHit()
+end)
 
 local function StartSwapMonitor()
     if not IsAlive() then return end
@@ -571,7 +593,6 @@ local function ExecuteFlow(showNotification, isManual)
     local Char = LP.Character
     local Hum = Char and Char:FindFirstChildOfClass("Humanoid")
     local HRP = Char and Char:FindFirstChild("HumanoidRootPart")
-
     if IsRagdolled(Hum) then return end
 
     if IsUnderRoof() then
@@ -599,9 +620,7 @@ local function ExecuteFlow(showNotification, isManual)
         end
 
         local exactPos = targetPart.Position
-        local carpetName = CARPET_NAME
-        local carpet = LP.Backpack:FindFirstChild(carpetName) or Char:FindFirstChild(carpetName)
-
+        local carpet = LP.Backpack:FindFirstChild(CARPET_NAME) or Char:FindFirstChild(CARPET_NAME)
         if carpet then Hum:EquipTool(carpet) end
         task.wait(0.01)
         if not IsAlive() or IsRagdolled(Hum) then isRunning = false; isTpMoving = false; return end
@@ -609,7 +628,6 @@ local function ExecuteFlow(showNotification, isManual)
         local isSecondFloor = exactPos.Y > 10
         local plotIndex = getClosestBaseIdx(exactPos)
         local targetBasePos = isSecondFloor and BASES_HIGH[plotIndex] or BASES_LOW[plotIndex]
-        
         local minHeight = 50
         local targetHeight = math.max(targetBasePos.Y, minHeight)
         savedYPosition = targetHeight  
@@ -618,8 +636,7 @@ local function ExecuteFlow(showNotification, isManual)
         local jumpStart = tick()
         while HRP.Position.Y < targetHeight and (tick() - jumpStart) < 3 do
             if not IsAlive() or IsRagdolled(Hum) then 
-                isRunning = false; isTpMoving = false; 
-                getgenv().SMKT_DISABLE_VELOCITY = false
+                isRunning = false; isTpMoving = false; getgenv().SMKT_DISABLE_VELOCITY = false
                 return 
             end 
             HRP.AssemblyLinearVelocity = Vector3.new(HRP.AssemblyLinearVelocity.X, 250, HRP.AssemblyLinearVelocity.Z)
@@ -666,85 +683,88 @@ local function ExecuteFlow(showNotification, isManual)
         task.wait(0.1)
         if not IsAlive() or IsRagdolled(Hum) then isRunning = false; isTpMoving = false; return end
         HRP.CFrame = CFrame.lookAt(HRP.Position, Vector3.new(bestFace.X, HRP.Position.Y, bestFace.Z))
-        
         savedYPosition = HRP.Position.Y  
-        
+
         local usedClone = false
         local didSwapInFlow = false
 
         if Settings.AutoClone then
             local skipClone = false
-
             if isSecondFloor then
                 walkForward(0.3)
                 task.wait(0.35)
                 if not IsAlive() or IsRagdolled(Hum) then isRunning = false; isTpMoving = false; return end
-                skipClone = false
             else
                 local posBeforeWalk = HRP.Position
                 walkForward(0.5)
                 task.wait(0.55)
                 if not IsAlive() or IsRagdolled(Hum) then isRunning = false; isTpMoving = false; return end
-                
                 local walkedDist = (HRP.Position - posBeforeWalk).Magnitude
                 skipClone = walkedDist > 7
             end
 
             if not skipClone then
-                local tool = LP.Backpack:FindFirstChild("Quantum Cloner") or Char:FindFirstChild("Quantum Cloner")
+                local tool = LP.Backpack:FindFirstChild(TOOL_NAME) or Char:FindFirstChild(TOOL_NAME)
                 if tool then
                     Hum:EquipTool(tool)
                     task.wait(0.05)
                     if not IsAlive() or IsRagdolled(Hum) then isRunning = false; isTpMoving = false; return end
-                    
                     pcall(function() tool:Activate() end)
                     VirtualInputManager:SendMouseButtonEvent(10, 10, 0, true, game, 1)
                     task.wait(0.02)
                     VirtualInputManager:SendMouseButtonEvent(10, 10, 0, false, game, 1)
-                    
                     usedClone = true
-                    
-                    local PlayerGui = LP:WaitForChild("PlayerGui")
-                    local toolsFrames = PlayerGui:WaitForChild("ToolsFrames", 2)
-                    if toolsFrames and IsAlive() and not IsRagdolled(Hum) then
-                        local qcFrame = toolsFrames:WaitForChild("QuantumCloner", 2)
-                        if qcFrame and IsAlive() and not IsRagdolled(Hum) then
-                            local tpButton = qcFrame:WaitForChild("TeleportToClone", 2)
-                            if tpButton then
-                                local preSwapPos = HRP.Position
-                                local clickTimeout = tick() + 2
-                                while tick() < clickTimeout do
-                                    if not IsAlive() or IsRagdolled(Hum) then break end
-                                    if (HRP.Position - preSwapPos).Magnitude > 2 then
-                                        didSwapInFlow = true
-                                        break
+
+                    -- Warten, bis der neue Clone wirklich gespawnt ist
+                    local cloneName = tostring(LP.UserId) .. "_Clone"
+                    local cloneSpawned = false
+                    local waitStart = tick()
+                    while tick() - waitStart < 3 do
+                        local clone = Workspace:FindFirstChild(cloneName)
+                        if clone then
+                            cloneSpawned = true
+                            break
+                        end
+                        task.wait(0.05)
+                    end
+
+                    if cloneSpawned then
+                        local PlayerGui = LP:WaitForChild("PlayerGui")
+                        local toolsFrames = PlayerGui:WaitForChild("ToolsFrames", 2)
+                        if toolsFrames and IsAlive() and not IsRagdolled(Hum) then
+                            local qcFrame = toolsFrames:WaitForChild("QuantumCloner", 2)
+                            if qcFrame and IsAlive() and not IsRagdolled(Hum) then
+                                local tpButton = qcFrame:WaitForChild("TeleportToClone", 2)
+                                if tpButton then
+                                    local preSwapPos = HRP.Position
+                                    local clickTimeout = tick() + 2
+                                    while tick() < clickTimeout do
+                                        if not IsAlive() or IsRagdolled(Hum) then break end
+                                        if (HRP.Position - preSwapPos).Magnitude > 2 then
+                                            didSwapInFlow = true
+                                            break
+                                        end
+                                        if tpButton.Visible and tpButton.AbsoluteSize.X > 0 then
+                                            ClickTeleportToClone(tpButton)
+                                            task.wait(0.02)
+                                        else
+                                            RunService.RenderStepped:Wait()
+                                        end
                                     end
-                                    if tpButton.Visible and tpButton.AbsoluteSize.X > 0 then
-                                        local absPos = tpButton.AbsolutePosition
-                                        local absSize = tpButton.AbsoluteSize
-                                        local inset = game:GetService("GuiService"):GetGuiInset()
-                                        local clickX = absPos.X + (absSize.X / 2)
-                                        local clickY = absPos.Y + (absSize.Y / 2) + inset.Y
-                                        VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, true, game, 1)
-                                        task.wait(0.01)
-                                        VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, false, game, 1)
-                                        task.wait(0.01)
-                                    else
-                                        RunService.RenderStepped:Wait()
+
+                                    if didSwapInFlow then
+                                        Equip(CARPET_NAME)
+                                        task.wait(0.1)
+                                        if not IsAlive() or IsRagdolled(Hum) then isRunning = false; isTpMoving = false; return end
+                                        local currentPos = HRP.Position
+                                        HRP.CFrame = CFrame.new(Vector3.new(currentPos.X, savedYPosition, currentPos.Z))
+                                        HRP.AssemblyLinearVelocity = Vector3.zero
+                                        HRP.AssemblyAngularVelocity = Vector3.zero
+                                        HRP.Anchored = true
+                                        task.wait(0.05)
+                                        if not IsAlive() or IsRagdolled(Hum) then isRunning = false; isTpMoving = false; return end
+                                        HRP.Anchored = false
                                     end
-                                end
-                                if didSwapInFlow then
-                                    Equip(CARPET_NAME)
-                                    task.wait(0.1)
-                                    if not IsAlive() or IsRagdolled(Hum) then isRunning = false; isTpMoving = false; return end
-                                    local currentPos = HRP.Position
-                                    HRP.CFrame = CFrame.new(Vector3.new(currentPos.X, savedYPosition, currentPos.Z))
-                                    HRP.AssemblyLinearVelocity = Vector3.zero
-                                    HRP.AssemblyAngularVelocity = Vector3.zero
-                                    HRP.Anchored = true
-                                    task.wait(0.05)
-                                    if not IsAlive() or IsRagdolled(Hum) then isRunning = false; isTpMoving = false; return end
-                                    HRP.Anchored = false
                                 end
                             end
                         end
@@ -769,10 +789,12 @@ local function ExecuteFlow(showNotification, isManual)
         end
         return
     end
+
     isRunning = false
     isTpMoving = false
 end
 
+-- UI Setup
 local parentUI = LP:WaitForChild("PlayerGui")
 if parentUI:FindFirstChild("TPPanel_Clean") then parentUI.TPPanel_Clean:Destroy() end
 
@@ -909,6 +931,73 @@ end
 CreateToggle("Auto Tp To Best", "AutoTp", false)
 CreateToggle("Auto Walk To Wall", "AutoWalk", false)
 CreateToggle("Auto Clone After TP", "AutoClone", false)
+
+-- Clone Mode sub-row
+local CloneModeFrame = Instance.new("Frame")
+CloneModeFrame.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
+CloneModeFrame.BorderSizePixel = 0
+CloneModeFrame.Parent = Main
+Instance.new("UICorner", CloneModeFrame).CornerRadius = UDim.new(0, 6)
+
+local goodBtn = Instance.new("TextButton")
+goodBtn.Size = UDim2.new(0.48, -5, 1, -6)
+goodBtn.Position = UDim2.new(0, 6, 0, 3)
+goodBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+goodBtn.AutoButtonColor = false
+goodBtn.Text = "Good Executor"
+goodBtn.Font = Enum.Font.GothamBold
+goodBtn.TextSize = 10
+goodBtn.TextColor3 = Color3.fromRGB(180, 180, 190)
+goodBtn.Parent = CloneModeFrame
+Instance.new("UICorner", goodBtn).CornerRadius = UDim.new(0, 6)
+
+local badBtn = Instance.new("TextButton")
+badBtn.Size = UDim2.new(0.48, -5, 1, -6)
+badBtn.Position = UDim2.new(0.52, 0, 0, 3)
+badBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+badBtn.AutoButtonColor = false
+badBtn.Text = "Bad Executor"
+badBtn.Font = Enum.Font.GothamBold
+badBtn.TextSize = 10
+badBtn.TextColor3 = Color3.fromRGB(180, 180, 190)
+badBtn.Parent = CloneModeFrame
+Instance.new("UICorner", badBtn).CornerRadius = UDim.new(0, 6)
+
+local function UpdateCloneModeUI()
+    if Settings.CloneMode == "Good" then
+        goodBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 80)
+        goodBtn.TextColor3 = Color3.fromRGB(220, 220, 230)
+        badBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+        badBtn.TextColor3 = Color3.fromRGB(150, 150, 160)
+    else
+        badBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 80)
+        badBtn.TextColor3 = Color3.fromRGB(220, 220, 230)
+        goodBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+        goodBtn.TextColor3 = Color3.fromRGB(150, 150, 160)
+    end
+end
+UpdateCloneModeUI()
+
+goodBtn.MouseButton1Click:Connect(function()
+    Settings.CloneMode = "Good"
+    SaveSettings()
+    UpdateCloneModeUI()
+end)
+
+badBtn.MouseButton1Click:Connect(function()
+    Settings.CloneMode = "Bad"
+    SaveSettings()
+    UpdateCloneModeUI()
+end)
+
+table.insert(UIItems, {
+    frame = CloneModeFrame,
+    isSubToggle = true,
+    parentKey = "AutoClone",
+    height = 26,
+    settingKey = nil
+})
+
 CreateToggle("Tp To Brainrot After", "TpToBrainrotAfter", false)
 CreateToggle("Tp After Hit", "TpAfterHit", false)
 
@@ -1142,7 +1231,8 @@ UpdateUILayout()
 
 local dragging, dragStart, startPos
 Main.InputBegan:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+    if i.UserInputType == Enum.UserInputType.MouseButton1
+        or i.UserInputType == Enum.UserInputType.Touch then
         dragging = true
         dragStart = i.Position
         startPos = Main.Position
