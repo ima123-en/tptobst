@@ -63,7 +63,7 @@ local Settings = {
     TpToBrainrotAfter = false,
     TpAfterHit = false,
     TpToBrainrotKey = "G",
-    CloneMode = "Good" -- "Good" = firesignal, "Bad" = VirtualInput
+    CloneMode = "Good"
 }
 
 local function SaveSettings()
@@ -86,6 +86,7 @@ LoadSettings()
 
 local allAnimalsCache = {}
 local isTpMoving = false
+local FirstPriorityWaitDone = false
 
 local function PlaySound(id)
     task.spawn(function()
@@ -221,9 +222,17 @@ local function scanPlots()
             if owner and al then
                 for slot, ad in pairs(al) do
                     if type(ad) == "table" and ad.Index then
-                        local gv = AnimalsShared:GetGeneration(ad.Index, ad.Mutation, ad.Traits, nil)
+                        local index = ad.Index
+                        local info = AnimalsData[index]
+                        local displayName = info and (info.DisplayName or info.Name) or index
+                        local gv = AnimalsShared:GetGeneration(index, ad.Mutation, ad.Traits, nil)
                         table.insert(temp, {
-                            name = ad.Index, genValue = gv, owner = owner.Name, plot = plot.Name, slot = tostring(slot)
+                            name = displayName,
+                            index = index,
+                            genValue = gv,
+                            owner = owner.Name,
+                            plot = plot.Name,
+                            slot = tostring(slot)
                         })
                     end
                 end
@@ -235,6 +244,18 @@ local function scanPlots()
 end
 
 local function GetBestTarget()
+    if not FirstPriorityWaitDone then
+        local start = tick()
+        while tick() - start < 1 do
+            local PS = getgenv().PrioritySystem
+            if PS and PS.SelectedData and PS.SelectedData.plot and PS.SelectedData.slot then
+                break
+            end
+            task.wait(0.1)
+        end
+        FirstPriorityWaitDone = true
+    end
+
     local targetPetData = nil
     local isPriority = false
     
@@ -248,10 +269,14 @@ local function GetBestTarget()
         for _, pName in ipairs(PRIORITY_LIST) do
             local search = pName:lower()
             for _, a in ipairs(allAnimalsCache) do
-                if a and a.name and a.name:lower() == search then
-                    targetPetData = a
-                    isPriority = true
-                    break
+                if a then
+                    local n = (a.name or ""):lower()
+                    local idx = (a.index or ""):lower()
+                    if n == search or idx == search then
+                        targetPetData = a
+                        isPriority = true
+                        break
+                    end
                 end
             end
             if targetPetData then break end
@@ -715,7 +740,6 @@ local function ExecuteFlow(showNotification, isManual)
                     VirtualInputManager:SendMouseButtonEvent(10, 10, 0, false, game, 1)
                     usedClone = true
 
-                    -- Warten, bis der neue Clone wirklich gespawnt ist
                     local cloneName = tostring(LP.UserId) .. "_Clone"
                     local cloneSpawned = false
                     local waitStart = tick()
@@ -794,7 +818,6 @@ local function ExecuteFlow(showNotification, isManual)
     isTpMoving = false
 end
 
--- UI Setup
 local parentUI = LP:WaitForChild("PlayerGui")
 if parentUI:FindFirstChild("TPPanel_Clean") then parentUI.TPPanel_Clean:Destroy() end
 
@@ -932,7 +955,6 @@ CreateToggle("Auto Tp To Best", "AutoTp", false)
 CreateToggle("Auto Walk To Wall", "AutoWalk", false)
 CreateToggle("Auto Clone After TP", "AutoClone", false)
 
--- Clone Mode sub-row
 local CloneModeFrame = Instance.new("Frame")
 CloneModeFrame.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
 CloneModeFrame.BorderSizePixel = 0
@@ -1192,7 +1214,6 @@ UserInputService.InputEnded:Connect(function(i)
     end
 end)
 
--- Merkt sich, ob im letzten Check ein High Value Brainrot da war
 local hadHighValueBrainrotLast = true
 
 task.spawn(function()
@@ -1212,8 +1233,6 @@ task.spawn(function()
         else
             PriorityStatus.Text = "No High Valueable Brainrot Found."
             PriorityStatus.TextColor3 = Color3.fromRGB(200, 100, 100)
-
-            -- Wenn vorher eins da war und jetzt nicht mehr → Sound einmal abspielen
             if hadHighValueBrainrotLast then
                 PlaySound("130511970684019")
             end
