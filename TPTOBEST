@@ -1150,27 +1150,27 @@ end
 
 UpdateUILayout()
 
-local dragging, dragStart, startPos
+local dragging2, dragStart2, startPos2
 Main.InputBegan:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1
         or i.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dragStart = i.Position
-        startPos = Main.Position
+        dragging2 = true
+        dragStart2 = i.Position
+        startPos2 = Main.Position
     end
 end)
 UserInputService.InputChanged:Connect(function(input)
-    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+    if dragging2 and (input.UserInputType == Enum.UserInputType.MouseMovement
         or input.UserInputType == Enum.UserInputType.Touch) then
-        local delta = input.Position - dragStart
-        Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X,
-            startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        local delta = input.Position - dragStart2
+        Main.Position = UDim2.new(startPos2.X.Scale, startPos2.X.Offset + delta.X,
+            startPos2.Y.Scale, startPos2.Y.Offset + delta.Y)
     end
 end)
 UserInputService.InputEnded:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1
         or i.UserInputType == Enum.UserInputType.Touch then
-        dragging = false
+        dragging2 = false
     end
 end)
 
@@ -1195,9 +1195,6 @@ task.spawn(function()
         else
             PriorityStatus.Text = "No High Valueable Brainrot Found."
             PriorityStatus.TextColor3 = Color3.fromRGB(200, 100, 100)
-            if hadSelectedLast then
-                PlaySound("130511970684019")
-            end
             hadSelectedLast = false
         end
         
@@ -1249,14 +1246,18 @@ end)
 
 task.spawn(function()
     local char = LP.Character or LP.CharacterAdded:Wait()
-    local hrp = char:WaitForChild("HumanoidRootPart", 10)
-    local hum = char:WaitForChild("Humanoid", 10)
-    if not hrp or not hum then return end
-    task.wait(1)
-    if Settings.AutoTp then
-        local targetData, targetPart = GetBestTarget()
-        if targetPart and targetData and targetData.name then
+    char:WaitForChild("HumanoidRootPart", 10)
+    char:WaitForChild("Humanoid", 10)
+    task.wait(0.1)
+    if not Settings.AutoTp then return end
+
+    local timeout = tick() + 5
+    while tick() < timeout do
+        local data, part = GetBestTarget()
+        if data and part then
             ExecuteFlow(true, false)
+            break
         end
+        task.wait(0.1)
     end
 end)
