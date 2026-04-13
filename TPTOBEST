@@ -24,10 +24,6 @@ local CARPET_NAME = "Flying Carpet"
 
 local SAVE_KEY = "Schmeckt_TPPanel_FinalSave_" .. LP.UserId
 
-local PRIORITY_LIST = {
-   "Strawberry Elephant", "Meowl", "Skibidi Toilet", "Headless Horseman", "Dragon Gingerini", "Dragon Cannelloni", "Ketupat Bros", "Hydra Dragon Cannelloni", "La Supreme Combinasion", "Love Love Bear", "Ginger Gerat", "Cerberus", "Capitano Moby", "La Casa Boo", "Burguro and Fryuro", "Spooky and Pumpky", "Cooki and Milki", "Rosey and Teddy", "Popcuru and Fizzuru", "Reinito Sleighito", "Fragrama and Chocrama", "Garama and Madundung", "Ketchuru und Musturu", "La Secret Combinasion", "Tralaledon", "Tictac Sahur", "Ketupat Kepat", "Tang Tang Keletang", "Orcaledon", "La Ginger Sekolah", "Los Spaghettis", "Lavadorito Spinito", "Swaggy Bros", "La Taco Combinasion", "Los Primos", "Chillin Chili", "Tuff Toucan", "W or L", "Chipso and Queso"
-}
-
 local BASES_LOW = {
     [1] = Vector3.new(-460, -6, 219), [5] = Vector3.new(-355, -6, 217),
     [2] = Vector3.new(-460, -6, 111), [6] = Vector3.new(-355, -6, 113),
@@ -63,7 +59,7 @@ local Settings = {
     TpToBrainrotAfter = false,
     TpAfterHit = false,
     TpToBrainrotKey = "G",
-    CloneMode = "Good" -- "Good" = firesignal, "Bad" = VirtualInput
+    CloneMode = "Good"
 }
 
 local function SaveSettings()
@@ -84,7 +80,6 @@ local function LoadSettings()
 end
 LoadSettings()
 
-local allAnimalsCache = {}
 local isTpMoving = false
 
 local function PlaySound(id)
@@ -210,30 +205,6 @@ _G._isTargetPlotUnlocked = function(plotName)
     return ok and res or false
 end
 
-local function scanPlots()
-    local temp = {}
-    for _, plot in ipairs(Workspace.Plots:GetChildren()) do
-        pcall(function()
-            local ch = Synchronizer:Get(plot.Name)
-            local al = ch and ch:Get("AnimalList")
-            local owner = ch and ch:Get("Owner")
-            if owner and owner.Name == LP.Name then return end
-            if owner and al then
-                for slot, ad in pairs(al) do
-                    if type(ad) == "table" and ad.Index then
-                        local gv = AnimalsShared:GetGeneration(ad.Index, ad.Mutation, ad.Traits, nil)
-                        table.insert(temp, {
-                            name = ad.Index, genValue = gv, owner = owner.Name, plot = plot.Name, slot = tostring(slot)
-                        })
-                    end
-                end
-            end
-        end)
-    end
-    table.sort(temp, function(a,b) return a.genValue > b.genValue end)
-    allAnimalsCache = temp
-end
-
 local function IsBrainrotInDuel(targetData)
     if not targetData or not targetData.plot then return false end
     local plots = Workspace:FindFirstChild("Plots")
@@ -259,40 +230,26 @@ local function IsBrainrotInDuel(targetData)
 end
 
 local function GetBestTarget()
-    local targetPetData = nil
-    local isPriority = false
-    
     local PS = getgenv().PrioritySystem
-    if PS and PS.SelectedData and PS.SelectedData.plot and PS.SelectedData.slot then
-        targetPetData = PS.SelectedData
-        isPriority = true
+    if not PS then return nil, nil, false end
+
+    local data
+    if typeof(PS.GetSelected) == "function" then
+        data = PS:GetSelected()
+    else
+        data = PS.SelectedData
     end
-    
-    if not targetPetData then
-        for _, pName in ipairs(PRIORITY_LIST) do
-            local search = pName:lower()
-            for _, a in ipairs(allAnimalsCache) do
-                if a and a.name and a.name:lower() == search then
-                    targetPetData = a
-                    isPriority = true
-                    break
-                end
-            end
-            if targetPetData then break end
-        end
+
+    if not data or not data.plot or not data.slot then
+        return nil, nil, false
     end
-    
-    if not targetPetData and #allAnimalsCache > 0 then 
-        targetPetData = allAnimalsCache[1] 
-        isPriority = false
+
+    local targetPart = findAdorneeGlobal(data)
+    if not targetPart then
+        return nil, nil, false
     end
-    
-    if not targetPetData then return nil, nil, false end
-    
-    local targetPart = findAdorneeGlobal(targetPetData)
-    if not targetPart then return nil, nil, false end
-    
-    return targetPetData, targetPart, isPriority
+
+    return data, targetPart, true
 end
 
 local function Equip(name)
@@ -821,7 +778,6 @@ local function ExecuteFlow(showNotification, isManual)
     isTpMoving = false
 end
 
--- UI Setup
 local parentUI = LP:WaitForChild("PlayerGui")
 if parentUI:FindFirstChild("TPPanel_Clean") then parentUI.TPPanel_Clean:Destroy() end
 
@@ -1218,32 +1174,32 @@ UserInputService.InputEnded:Connect(function(i)
     end
 end)
 
-local hadHighValueBrainrotLast = true
+local hadSelectedLast = false
 
 task.spawn(function()
     while Main.Parent do
-        scanPlots()
-        local PS = getgenv().PrioritySystem
-        local hasHighValue = false
-
-        if PS and PS.SelectedData and PS.SelectedData.name then
-            PriorityStatus.Text = "→ " .. PS.SelectedData.name
-            PriorityStatus.TextColor3 = Color3.fromRGB(100, 200, 100)
-            hasHighValue = true
-        elseif allAnimalsCache[1] then
-            PriorityStatus.Text = "→ " .. (allAnimalsCache[1].name or "Unknown")
-            PriorityStatus.TextColor3 = Color3.fromRGB(100, 200, 100)
-            hasHighValue = true
-        else
-            PriorityStatus.Text = "No High Valueable Brainrot Found."
-            PriorityStatus.TextColor3 = Color3.fromRGB(200, 100, 100)
-
-            if hadHighValueBrainrotLast then
-                PlaySound("130511970684019")
+        local PS2 = getgenv().PrioritySystem
+        local sel = nil
+        if PS2 then
+            if typeof(PS2.GetSelected) == "function" then
+                sel = PS2:GetSelected()
+            else
+                sel = PS2.SelectedData
             end
         end
 
-        hadHighValueBrainrotLast = hasHighValue
+        if sel and sel.name then
+            PriorityStatus.Text = "→ " .. sel.name
+            PriorityStatus.TextColor3 = Color3.fromRGB(100, 200, 100)
+            hadSelectedLast = true
+        else
+            PriorityStatus.Text = "No High Valueable Brainrot Found."
+            PriorityStatus.TextColor3 = Color3.fromRGB(200, 100, 100)
+            if hadSelectedLast then
+                PlaySound("130511970684019")
+            end
+            hadSelectedLast = false
+        end
         
         if isRunning or isTpMoving then
             StatusText.Text = "Running"
