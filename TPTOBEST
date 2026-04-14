@@ -26,6 +26,7 @@ local CARPET_NAME = "Flying Carpet"
 
 local SAVE_KEY = "Schmeckt_TPPanel_FinalSave_" .. LP.UserId
 
+-- Liste ist jetzt nur noch Deko – Teleport benutzt NUR PrioritySystem!
 local PRIORITY_LIST = {
    "Strawberry Elephant","Meowl","Skibidi Toilet","Headless Horseman","Dragon Gingerini","Dragon Cannelloni",
    "Ketupat Bros","Hydra Dragon Cannelloni","La Supreme Combinasion","Love Love Bear","Ginger Gerat","Cerberus",
@@ -66,7 +67,7 @@ local FACE_TARGETS = {
 
 local Settings = {
     AutoTp = true,
-    AutoWalk = true, -- nur UI, Logik nutzt QuickWallCheck/Upper-Perfect
+    AutoWalk = true, -- nur UI, Logik nutzt PrioritySystem + QuickWallCheck/Upper-Perfect
     AutoClone = true,
     TpToBrainrotAfter = false,
     TpAfterHit = false,
@@ -92,15 +93,28 @@ local function LoadSettings()
 end
 LoadSettings()
 
-local allAnimalsCache = {}
-local isTpMoving = false
+local isTpMoving         = false
+local isRunning          = false
+local swapMonitorActive  = false
+local posBeforeSwap      = nil
+local savedHipHeight     = 2.5
+local savedYPosition     = nil
+local LastRagdollTime    = 0
+local RagdollCooldown    = 0.5
+local AllowTpAfterRagdoll= false
+
+local TeleportToBrainrot
+
+-------------------------------------------------
+-- Basic Helpers
+-------------------------------------------------
 
 local function PlaySound(id)
     task.spawn(function()
         local snd = Instance.new("Sound")
         snd.SoundId = "rbxassetid://" .. id
-        snd.Volume = 0.3
-        snd.Parent = Workspace
+        snd.Volume  = 0.3
+        snd.Parent  = Workspace
         snd:Play()
         snd.Ended:Wait()
         snd:Destroy()
@@ -108,7 +122,7 @@ local function PlaySound(id)
 end
 
 local function IsAlive()
-    local c = LP.Character
+    local c   = LP.Character
     if not c then return false end
     local h   = c:FindFirstChildOfClass("Humanoid")
     local hrp = c:FindFirstChild("HumanoidRootPart")
@@ -125,23 +139,37 @@ local function IsRagdolled(h)
 end
 
 local function IsUnderRoof()
-    local char = LP.Character
-    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    local c   = LP.Character
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
     if not hrp then return true end
 
     local params = RaycastParams.new()
-    params.FilterDescendantsInstances = {char, Workspace.CurrentCamera}
+    params.FilterDescendantsInstances = {c, Workspace.CurrentCamera}
     params.FilterType = Enum.RaycastFilterType.Exclude
 
     local ray = Workspace:Raycast(hrp.Position, Vector3.new(0, 100, 0), params)
     return ray and ray.Instance and ray.Instance.CanCollide or false
 end
 
+local function IsHoldingBrainrot()
+    local c = LP.Character
+    if not c then return false end
+    for _, t in ipairs(c:GetChildren()) do
+        if t:IsA("Tool") and t.Name ~= CARPET_NAME and t.Name ~= TOOL_NAME then
+            return true
+        end
+    end
+    return false
+end
+
 local function getClosestBaseIdx(pos)
     local closest, dist = 1, math.huge
     for i, basePos in pairs(BASES_LOW) do
         local d = (Vector2.new(pos.X, pos.Z) - Vector2.new(basePos.X, basePos.Z)).Magnitude
-        if d < dist then dist = d; closest = i end
+        if d < dist then
+            dist    = d
+            closest = i
+        end
     end
     return closest
 end
@@ -163,252 +191,35 @@ local function findAdorneeGlobal(animalData)
     return nil
 end
 
-local function walkForward(seconds)
-    if not IsAlive() then return end
-    local char = LP.Character
-    local hum  = char:FindFirstChild("Humanoid")
-    local hrp  = char:FindFirstChild("HumanoidRootPart")
-    if not hum or not hrp or IsRagdolled(hum) then return end
-
-    local playerScripts = LP:WaitForChild("PlayerScripts")
-    local playerModule  = require(playerScripts:WaitForChild("PlayerModule"))
-    local Controls      = playerModule:GetControls()
-    local lookVector    = hrp.CFrame.LookVector
-
-    Controls:Disable()
-    local startTime = os.clock()
-    local conn
-    conn = RunService.RenderStepped:Connect(function()
-        if os.clock() - startTime >= seconds or not IsAlive() or IsRagdolled(hum) then
-            conn:Disconnect()
-            if IsAlive() then
-                hum:Move(Vector3.zero, false)
-                Controls:Enable()
-            end
-            return
-        end
-        hum:Move(lookVector, false)
-    end)
-end
-
-_G._isTargetPlotUnlocked = function(plotName)
-    local ok, res = pcall(function()
-        local plots = Workspace:FindFirstChild("Plots")
-        if not plots then return false end
-        local targetPlot = plots:FindFirstChild(plotName)
-        if not targetPlot then return false end
-        local unlockFolder = targetPlot:FindFirstChild("Unlock")
-        if not unlockFolder then return true end
-        local unlockItems = {}
-        for _, item in pairs(unlockFolder:GetChildren()) do
-            local pos = nil
-            if item:IsA("Model") then pcall(function() pos = item:GetPivot().Position end)
-            elseif item:IsA("BasePart") then pos = item.Position end
-            if pos then table.insert(unlockItems, {Object = item, Height = pos.Y}) end
-        end
-        table.sort(unlockItems, function(a, b) return a.Height < b.Height end)
-        if #unlockItems == 0 then return true end
-        local floor1Door = unlockItems[1].Object
-        for _, desc in ipairs(floor1Door:GetDescendants()) do
-            if desc:IsA("ProximityPrompt") and desc.Enabled then return false end
-        end
-        for _, child in ipairs(floor1Door:GetChildren()) do
-            if child:IsA("ProximityPrompt") and child.Enabled then return false end
-        end
-        return true
-    end)
-    return ok and res or false
-end
-
-local function scanPlots()
-    local temp = {}
-    for _, plot in ipairs(Workspace.Plots:GetChildren()) do
-        pcall(function()
-            local ch    = Synchronizer:Get(plot.Name)
-            local al    = ch and ch:Get("AnimalList")
-            local owner = ch and ch:Get("Owner")
-            if owner and owner.Name == LP.Name then return end
-            if owner and al then
-                for slot, ad in pairs(al) do
-                    if type(ad) == "table" and ad.Index then
-                        local gv = AnimalsShared:GetGeneration(ad.Index, ad.Mutation, ad.Traits, nil)
-                        table.insert(temp,{
-                            name     = ad.Index,
-                            genValue = gv,
-                            owner    = owner.Name,
-                            plot     = plot.Name,
-                            slot     = tostring(slot)
-                        })
-                    end
-                end
-            end
-        end)
-    end
-    table.sort(temp, function(a,b) return a.genValue > b.genValue end)
-    allAnimalsCache = temp
-end
-
-local function IsBrainrotInDuel(targetData)
-    if not targetData or not targetData.plot then return false end
-    local plots = Workspace:FindFirstChild("Plots")
-    if not plots then return false end
-    local plot = plots:FindFirstChild(targetData.plot)
-    if not plot then return false end
-
-    local ok, ch = pcall(function() return Synchronizer:Get(plot.Name) end)
-    if not ok or not ch then return false end
-
-    local owner = ch:Get("Owner")
-    local ownerPlayer
-
-    if typeof(owner) == "Instance" and owner:IsA("Player") then
-        ownerPlayer = owner
-    elseif typeof(owner) == "table" and owner.UserId then
-        ownerPlayer = Players:GetPlayerByUserId(owner.UserId)
-    elseif typeof(owner) == "table" and owner.Name then
-        ownerPlayer = Players:FindFirstChild(owner.Name)
-    end
-
-    return ownerPlayer and ownerPlayer:GetAttribute("__duels_block_steal") == true
-end
-
+-------------------------------------------------
+-- GetBestTarget NUR über PrioritySystem
+-------------------------------------------------
 local function GetBestTarget()
-    local targetPetData = nil
-    local isPriority    = false
-    
     local PS = getgenv().PrioritySystem
-    if PS and PS.SelectedData and PS.SelectedData.plot and PS.SelectedData.slot then
-        targetPetData = PS.SelectedData
-        isPriority    = true
+    if not PS or not PS.SelectedData then
+        return nil, nil, false
     end
-    
-    if not targetPetData then
-        for _, pName in ipairs(PRIORITY_LIST) do
-            local search = pName:lower()
-            for _, a in ipairs(allAnimalsCache) do
-                if a and a.name and a.name:lower() == search then
-                    targetPetData = a
-                    isPriority    = true
-                    break
-                end
-            end
-            if targetPetData then break end
-        end
+
+    local sel = PS.SelectedData
+    if not sel.plot or not sel.slot then
+        return nil, nil, false
     end
-    
-    if not targetPetData and #allAnimalsCache > 0 then 
-        targetPetData = allAnimalsCache[1] 
-        isPriority    = false
-    end
-    
-    if not targetPetData then return nil, nil, false end
-    
-    local targetPart = findAdorneeGlobal(targetPetData)
+
+    local targetPart = findAdorneeGlobal(sel)
     if not targetPart then return nil, nil, false end
-    
-    return targetPetData, targetPart, isPriority
+
+    return sel, targetPart, true  -- immer Priority
 end
-
-local function Equip(name)
-    if not IsAlive() then return false end
-    local char = LP.Character
-    local hum  = char and char:FindFirstChildOfClass("Humanoid")
-    local tool = LP.Backpack:FindFirstChild(name) or (char and char:FindFirstChild(name))
-    if hum and tool then hum:EquipTool(tool) return true end
-    return false
-end
-
-local function IsHoldingBrainrot()
-    local char = LP.Character
-    if not char then return false end
-    for _, t in ipairs(char:GetChildren()) do
-        if t:IsA("Tool") and t.Name ~= CARPET_NAME and t.Name ~= TOOL_NAME then 
-            return true 
-        end
-    end
-    return false
-end
-
-local isRunning         = false
-local swapMonitorActive = false
-local posBeforeSwap     = nil
-local savedHipHeight    = 2.5
-local savedYPosition    = nil
-
-local LastRagdollTime   = 0
-local RagdollCooldown   = 0.5
-local AllowTpAfterRagdoll = false
-
-local TeleportToBrainrot
 
 -------------------------------------------------
--- Notifications / Float / Clone-Click
+-- Float / Equip / CloneClick / Raycast / QuickWall
 -------------------------------------------------
-
-local function ShowNotification(text, customColor)
-    local NotificationGui = LP.PlayerGui:FindFirstChild("TPNotification")
-    if not NotificationGui then
-        NotificationGui = Instance.new("ScreenGui")
-        NotificationGui.Name = "TPNotification"
-        NotificationGui.ResetOnSpawn = false
-        NotificationGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-        NotificationGui.DisplayOrder = 999
-        NotificationGui.Parent = LP:WaitForChild("PlayerGui")
-        local frame = Instance.new("Frame")
-        frame.Name = "Frame"
-        frame.Size = UDim2.new(0, 350, 0, 70)
-        frame.Position = UDim2.new(0.5, -175, 0.08, 0)
-        frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-        frame.BorderSizePixel = 0
-        frame.BackgroundTransparency = 1
-        frame.Visible = false
-        frame.Parent = NotificationGui
-        Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
-        local label = Instance.new("TextLabel")
-        label.Name = "Text"
-        label.Size = UDim2.new(1, 0, 1, 0)
-        label.BackgroundTransparency = 1
-        label.TextColor3 = Color3.fromRGB(255, 255, 255)
-        label.Font = Enum.Font.GothamBold
-        label.TextSize = 22
-        label.Parent = frame
-    end
-    local NotifFrame = NotificationGui:FindFirstChild("Frame")
-    local NotifText  = NotifFrame and NotifFrame:FindFirstChild("Text")
-    if not NotifFrame or not NotifText then return end
-
-    NotifFrame.Visible = true
-    NotifFrame.BackgroundTransparency = 0
-    NotifText.Text            = text
-    NotifText.TextTransparency = 0
-    NotifText.TextColor3      = customColor or Color3.fromRGB(255, 255, 255)
-    
-    task.spawn(function()
-        local startTime = tick()
-        while tick() - startTime < 4 do
-            for i = 0, 1, 0.05 do
-                if not NotifFrame.Visible then break end
-                local brightness = 1 - (math.sin(i * math.pi) * 0.4)
-                if not customColor then
-                    NotifText.TextColor3 = Color3.fromRGB(255 * brightness, 255 * brightness, 255 * brightness)
-                end
-                task.wait(0.03)
-            end
-        end
-        for i = 0, 1, 0.05 do
-            NotifFrame.BackgroundTransparency = i
-            NotifText.TextTransparency        = i
-            task.wait(0.02)
-        end
-        NotifFrame.Visible = false
-    end)
-end
 
 local function PerformVelocityFloat(targetPart, ignoreRagdoll)
     if not IsAlive() then return end
-    local char = LP.Character
-    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-    local hum  = char and char:FindFirstChildOfClass("Humanoid")
+    local c   = LP.Character
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    local hum = c and c:FindFirstChildOfClass("Humanoid")
     if not hrp or not targetPart or not hum then return end
     if not ignoreRagdoll and IsRagdolled(hum) then return end
 
@@ -425,10 +236,10 @@ local function PerformVelocityFloat(targetPart, ignoreRagdoll)
     end
 
     local params = RaycastParams.new()
-    params.FilterDescendantsInstances = {char, Workspace.CurrentCamera}
+    params.FilterDescendantsInstances = {c, Workspace.CurrentCamera}
     params.FilterType = Enum.RaycastFilterType.Exclude
 
-    local targetY = petPos.Y
+    local targetY      = petPos.Y
     local invisibleFloor, fConn
 
     local floatStart = tick()
@@ -440,7 +251,7 @@ local function PerformVelocityFloat(targetPart, ignoreRagdoll)
             break
         end
 
-        local head = char:FindFirstChild("Head") or hrp
+        local head = c:FindFirstChild("Head") or hrp
         local ray  = Workspace:Raycast(head.Position, Vector3.new(0, 3, 0), params)
 
         if ray and ray.Instance and ray.Instance.CanCollide then
@@ -487,6 +298,15 @@ local function PerformVelocityFloat(targetPart, ignoreRagdoll)
     end
 end
 
+local function Equip(name)
+    if not IsAlive() then return false end
+    local c   = LP.Character
+    local hum = c and c:FindFirstChildOfClass("Humanoid")
+    local tool= LP.Backpack:FindFirstChild(name) or (c and c:FindFirstChild(name))
+    if hum and tool then hum:EquipTool(tool) return true end
+    return false
+end
+
 local function ClickTeleportToClone(tpButton)
     if not tpButton then return end
     tpButton.Visible = true
@@ -501,33 +321,32 @@ local function ClickTeleportToClone(tpButton)
         local inset   = GuiService:GetGuiInset()
         local absPos  = tpButton.AbsolutePosition
         local absSize = tpButton.AbsoluteSize
-        local clickX = absPos.X + (absSize.X / 2) + inset.X
-        local clickY = absPos.Y + (absSize.Y / 2) + inset.Y
+        local clickX  = absPos.X + absSize.X/2 + inset.X
+        local clickY  = absPos.Y + absSize.Y/2 + inset.Y
         VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, true, game, 1)
         task.wait(0.01)
         VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, false, game, 1)
     end
 end
 
--- Raycast vom Brustpunkt nach vorne (Upper-Floor-Wand)
 local function RaycastWallFromChest(maxDist)
-    local char = LP.Character
-    if not char then return nil end
-    local hrp  = char:FindFirstChild("HumanoidRootPart")
+    local c   = LP.Character
+    if not c then return nil end
+    local hrp = c:FindFirstChild("HumanoidRootPart")
     if not hrp then return nil end
 
     local origin = hrp.Position + Vector3.new(0, 0.8, 0)
     local dir    = hrp.CFrame.LookVector * maxDist
 
     local params = RaycastParams.new()
-    params.FilterDescendantsInstances = {char, Workspace.CurrentCamera}
+    params.FilterDescendantsInstances = {c, Workspace.CurrentCamera}
     params.FilterType = Enum.RaycastFilterType.Exclude
 
     local result = Workspace:Raycast(origin, dir, params)
     return result
 end
 
--- QuickWallCheck NUR für den unteren Floor: physikalisch gegen Laser/Wand laufen
+-- physischer Quick-WallCheck NUR für 1. Floor
 local function QuickWallCheck(hum, hrp)
     if not hum or not hrp or IsRagdolled(hum) then return false end
 
@@ -564,14 +383,14 @@ local function QuickWallCheck(hum, hrp)
 end
 
 -------------------------------------------------
--- TeleportToBrainrot (Keybind / Hit-TP)
+-- TeleportToBrainrot (Keybind / TpAfterHit)
 -------------------------------------------------
 
 TeleportToBrainrot = function(ignoreRagdoll)
     if not IsAlive() then return end
-    local char = LP.Character
-    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-    local hum  = char and char:FindFirstChildOfClass("Humanoid")
+    local c   = LP.Character
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    local hum = c and c:FindFirstChildOfClass("Humanoid")
     if not hrp or not hum then return end
     if not ignoreRagdoll and IsRagdolled(hum) then return end
     if IsHoldingBrainrot() or LP:GetAttribute("Stealing") then return end
@@ -649,8 +468,8 @@ end)
 
 local function StartSwapMonitor()
     if not IsAlive() then return end
-    local char = LP.Character
-    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    local c   = LP.Character
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
     posBeforeSwap   = hrp.Position
@@ -662,8 +481,8 @@ local function StartSwapMonitor()
         while swapMonitorActive and tick() < timeout do
             task.wait(0.05)
             if not IsAlive() then swapMonitorActive = false return end
-            char = LP.Character
-            hrp  = char and char:FindFirstChild("HumanoidRootPart")
+            c   = LP.Character
+            hrp = c and c:FindFirstChild("HumanoidRootPart")
             if not hrp then break end
 
             local dist = (hrp.Position - posBeforeSwap).Magnitude
@@ -686,7 +505,7 @@ local function StartSwapMonitor()
 end
 
 -------------------------------------------------
--- ExecuteFlow mit Upper-Perfect-Clone-Logic
+-- ExecuteFlow mit Upper-Perfect-Logic
 -------------------------------------------------
 
 local function ExecuteFlow(showNotification, isManual)
@@ -728,14 +547,14 @@ local function ExecuteFlow(showNotification, isManual)
         local carpet   = LP.Backpack:FindFirstChild(CARPET_NAME) or Char:FindFirstChild(CARPET_NAME)
         if carpet then Hum:EquipTool(carpet) end
         task.wait(0.01)
-        if not IsAlive() or IsRagdolled(Hum) then isRunning = false; isTpMoving = false; return end
+        if not IsAlive() or IsRagdolled(Hum) then isRunning=false;isTpMoving=false;return end
 
-        local isSecondFloor  = exactPos.Y > 10
-        local plotIndex      = getClosestBaseIdx(exactPos)
-        local targetBasePos  = isSecondFloor and BASES_HIGH[plotIndex] or BASES_LOW[plotIndex]
-        local minHeight      = 50
-        local targetHeight   = math.max(targetBasePos.Y, minHeight)
-        savedYPosition       = targetHeight  
+        local isSecondFloor = exactPos.Y > 10
+        local plotIndex     = getClosestBaseIdx(exactPos)
+        local targetBasePos = isSecondFloor and BASES_HIGH[plotIndex] or BASES_LOW[plotIndex]
+        local minHeight     = 50
+        local targetHeight  = math.max(targetBasePos.Y, minHeight)
+        savedYPosition      = targetHeight  
 
         -- Hochziehen
         getgenv().SMKT_DISABLE_VELOCITY = true
@@ -750,9 +569,9 @@ local function ExecuteFlow(showNotification, isManual)
         end
         getgenv().SMKT_DISABLE_VELOCITY = false
 
-        -- an Base snappen
+        -- an Base-Position snappen
         for i = 1, 10 do
-            if not IsAlive() or IsRagdolled(Hum) then isRunning = false; isTpMoving = false; return end 
+            if not IsAlive() or IsRagdolled(Hum) then isRunning=false;isTpMoving=false;return end 
             HRP.AssemblyLinearVelocity = Vector3.new(HRP.AssemblyLinearVelocity.X, 0, HRP.AssemblyLinearVelocity.Z)
             if (HRP.Position - targetBasePos).Magnitude > 3 then
                 HRP.CFrame = CFrame.new(targetBasePos)
@@ -760,7 +579,7 @@ local function ExecuteFlow(showNotification, isManual)
             end
         end
 
-        -- Untere Etage: zu CLONE_POSITIONS_FLOOR snappen (sauber vor Plot)
+        -- Unterer Floor: Position vor Plot (für Laser/Clone)
         if not isSecondFloor then
             local bestSpot = CLONE_POSITIONS_FLOOR[1]
             local minDst   = math.huge
@@ -769,7 +588,7 @@ local function ExecuteFlow(showNotification, isManual)
                 if d < minDst then minDst = d; bestSpot = v end
             end
             for i = 1, 6 do
-                if not IsAlive() or IsRagdolled(Hum) then isRunning = false; isTpMoving = false; return end 
+                if not IsAlive() or IsRagdolled(Hum) then isRunning=false;isTpMoving=false;return end 
                 if (HRP.Position - bestSpot).Magnitude > 3 then
                     HRP.CFrame = CFrame.new(bestSpot)
                     task.wait(0.05)
@@ -777,11 +596,11 @@ local function ExecuteFlow(showNotification, isManual)
             end
         end
 
-        -- FACE_TARGET: Gerade zur Wand
+        -- FACE_TARGET: Richtung Wand drehen
         local bestFace    = FACE_TARGETS[1]
         local minFaceDist = math.huge
         for _, v in ipairs(FACE_TARGETS) do
-            if not IsAlive() or IsRagdolled(Hum) then isRunning = false; isTpMoving = false; return end
+            if not IsAlive() or IsRagdolled(Hum) then isRunning=false;isTpMoving=false;return end
             local d = (HRP.Position - v).Magnitude
             if d < minFaceDist then
                 minFaceDist = d
@@ -790,11 +609,11 @@ local function ExecuteFlow(showNotification, isManual)
         end
 
         task.wait(0.1)
-        if not IsAlive() or IsRagdolled(Hum) then isRunning = false; isTpMoving = false; return end
+        if not IsAlive() or IsRagdolled(Hum) then isRunning=false;isTpMoving=false;return end
         HRP.CFrame      = CFrame.lookAt(HRP.Position, Vector3.new(bestFace.X, HRP.Position.Y, bestFace.Z))
         savedYPosition  = HRP.Position.Y  
 
-        -- Upper-Floor: PERFEKTER Wand-TP + 0.2s Stabilisierung (Clone erst danach)
+        -- OBERER FLOOR: perfekter Wand-TP + 0.2s Stabilisierung VOR dem Clone
         if isSecondFloor then
             local hit = RaycastWallFromChest(80)
             if hit then
@@ -803,12 +622,14 @@ local function ExecuteFlow(showNotification, isManual)
                 local y       = HRP.Position.Y
                 local wallPos = Vector3.new(hitPos.X, y, hitPos.Z)
 
+                -- 1) direkt an die Wand
                 HRP.CFrame = CFrame.lookAt(wallPos, wallPos + dir)
 
+                -- 2) 0.2s „an der Wand locken“ (kein Clone!)
                 local settleStart = tick()
                 while tick() - settleStart < 0.2 do
                     if not IsAlive() or IsRagdolled(Hum) then
-                        isRunning = false; isTpMoving = false; return
+                        isRunning=false;isTpMoving=false;return
                     end
                     local dist = (HRP.Position - wallPos).Magnitude
                     if dist > 0.5 then
@@ -819,19 +640,19 @@ local function ExecuteFlow(showNotification, isManual)
                     RunService.Heartbeat:Wait()
                 end
 
+                -- minimal anchor-peak
                 HRP.Anchored = true
                 task.wait(0.02)
                 HRP.Anchored = false
                 if not IsAlive() or IsRagdolled(Hum) then
-                    isRunning = false; isTpMoving = false; return
+                    isRunning=false;isTpMoving=false;return
                 end
             end
         end
 
-        local usedClone    = false
+        local usedClone     = false
         local didSwapInFlow = false
 
-        -- AutoClone (Upper: immer; Lower: QuickWallCheck)
         if Settings.AutoClone then
             local needClone
             if isSecondFloor then
@@ -846,7 +667,6 @@ local function ExecuteFlow(showNotification, isManual)
                     Hum:EquipTool(tool)
                     task.wait(0.05)
                     if not IsAlive() or IsRagdolled(Hum) then isRunning=false;isTpMoving=false;return end
-
                     pcall(function() tool:Activate() end)
                     usedClone = true
 
@@ -907,7 +727,6 @@ local function ExecuteFlow(showNotification, isManual)
             local currentPos = HRP.Position
             local petPos     = targetPart.Position
             local deltaY     = math.abs(petPos.Y - currentPos.Y)
-
             if deltaY < 4 then
                 local look  = HRP.CFrame.LookVector
                 local tpPos = Vector3.new(petPos.X, currentPos.Y, petPos.Z)
@@ -933,24 +752,24 @@ local function ExecuteFlow(showNotification, isManual)
 end
 
 -------------------------------------------------
--- UI Setup (wie dein Original)
+-- UI Setup
 -------------------------------------------------
 local parentUI = LP:WaitForChild("PlayerGui")
 if parentUI:FindFirstChild("TPPanel_Clean") then parentUI.TPPanel_Clean:Destroy() end
 
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "TPPanel_Clean"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-ScreenGui.Parent = parentUI
+ScreenGui.Name              = "TPPanel_Clean"
+ScreenGui.ResetOnSpawn      = false
+ScreenGui.ZIndexBehavior    = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent            = parentUI
 
 local Main = Instance.new("Frame")
-Main.Name = "Main"
-Main.Size = UDim2.new(0, 270, 0, 230)
-Main.Position = UDim2.new(1, -285, 0, 50)
-Main.BackgroundColor3 = Color3.fromRGB(12, 12, 14)
-Main.BorderSizePixel   = 0
-Main.Parent = ScreenGui
+Main.Name               = "Main"
+Main.Size               = UDim2.new(0, 270, 0, 230)
+Main.Position           = UDim2.new(1, -285, 0, 50)
+Main.BackgroundColor3   = Color3.fromRGB(12, 12, 14)
+Main.BorderSizePixel    = 0
+Main.Parent             = ScreenGui
 Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 10)
 Instance.new("UIStroke", Main).Color        = Color3.fromRGB(35, 35, 40)
 
@@ -966,15 +785,15 @@ Title.TextXAlignment     = Enum.TextXAlignment.Left
 Title.Parent             = Main
 
 local PriorityStatus = Instance.new("TextLabel")
-PriorityStatus.Size           = UDim2.new(0, 150, 0, 20)
-PriorityStatus.Position       = UDim2.new(1, -160, 0, 8)
+PriorityStatus.Size               = UDim2.new(0, 150, 0, 20)
+PriorityStatus.Position           = UDim2.new(1, -160, 0, 8)
 PriorityStatus.BackgroundTransparency = 1
-PriorityStatus.Text           = ""
-PriorityStatus.TextColor3     = Color3.fromRGB(100, 200, 100)
-PriorityStatus.Font           = Enum.Font.Gotham
-PriorityStatus.TextSize       = 9
-PriorityStatus.TextXAlignment = Enum.TextXAlignment.Right
-PriorityStatus.Parent         = Main
+PriorityStatus.Text               = ""
+PriorityStatus.TextColor3         = Color3.fromRGB(100, 200, 100)
+PriorityStatus.Font               = Enum.Font.Gotham
+PriorityStatus.TextSize           = 9
+PriorityStatus.TextXAlignment     = Enum.TextXAlignment.Right
+PriorityStatus.Parent             = Main
 
 local DivM = Instance.new("Frame", Main)
 DivM.Size              = UDim2.new(0.9, 0, 0, 1)
@@ -988,8 +807,8 @@ local UpdateUILayout
 local function CreateToggle(name, settingKey, isSubToggle, parentKey)
     local holder = Instance.new("Frame")
     holder.BackgroundColor3 = isSubToggle and Color3.fromRGB(16, 16, 20) or Color3.fromRGB(20, 20, 24)
-    holder.BorderSizePixel = 0
-    holder.Parent = Main
+    holder.BorderSizePixel  = 0
+    holder.Parent           = Main
     Instance.new("UICorner", holder).CornerRadius = UDim.new(0, 8)
 
     local label = Instance.new("TextLabel")
@@ -1333,31 +1152,25 @@ UserInputService.InputEnded:Connect(function(i)
     end
 end)
 
-local hadHighValueBrainrotLast = true
+local hadPriorityLast = true
 
 task.spawn(function()
     while Main.Parent do
-        scanPlots()
         local PS          = getgenv().PrioritySystem
-        local hasHighValue= false
+        local hasPriority = PS and PS.SelectedData and PS.SelectedData.name ~= nil
 
-        if PS and PS.SelectedData and PS.SelectedData.name then
-            PriorityStatus.Text      = "→ " .. PS.SelectedData.name
+        if hasPriority then
+            PriorityStatus.Text      = "→ " .. tostring(PS.SelectedData.name)
             PriorityStatus.TextColor3= Color3.fromRGB(100, 200, 100)
-            hasHighValue             = true
-        elseif allAnimalsCache[1] then
-            PriorityStatus.Text      = "→ " .. (allAnimalsCache[1].name or "Unknown")
-            PriorityStatus.TextColor3= Color3.fromRGB(100, 200, 100)
-            hasHighValue             = true
         else
-            PriorityStatus.Text      = "No High Valueable Brainrot Found."
+            PriorityStatus.Text      = "No Priority Selected."
             PriorityStatus.TextColor3= Color3.fromRGB(200, 100, 100)
-            if hadHighValueBrainrotLast then
+            if hadPriorityLast then
                 PlaySound("130511970684019")
             end
         end
 
-        hadHighValueBrainrotLast = hasHighValue
+        hadPriorityLast = hasPriority
         
         if isRunning or isTpMoving then
             StatusText.Text          = "Running"
@@ -1412,8 +1225,8 @@ task.spawn(function()
     if not hrp or not hum then return end
     task.wait(1)
     if Settings.AutoTp then
-        local targetData, targetPart = GetBestTarget()
-        if targetPart and targetData and targetData.name then
+        local PS = getgenv().PrioritySystem
+        if PS and PS.SelectedData then
             ExecuteFlow(true, false)
         end
     end
