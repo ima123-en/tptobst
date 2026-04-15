@@ -14,8 +14,12 @@ local GuiService          = game:GetService("GuiService")
 local LP = Players.LocalPlayer
 
 local Packages = ReplicatedStorage:WaitForChild("Packages")
-local Shared   = ReplicatedStorage:WaitForChild("Shared") -- nur falls du noch anderes Shared brauchst
-local Synchronizer = require(Packages:WaitForChild("Synchronizer"))
+local Datas    = ReplicatedStorage:WaitForChild("Datas")
+local Shared   = ReplicatedStorage:WaitForChild("Shared")
+
+local Synchronizer  = require(Packages:WaitForChild("Synchronizer"))
+local AnimalsData   = require(Datas:WaitForChild("Animals"))
+local AnimalsShared = require(Shared:WaitForChild("Animals"))
 
 local TOOL_NAME   = "Quantum Cloner"
 local CARPET_NAME = "Flying Carpet"
@@ -52,7 +56,7 @@ local FACE_TARGETS = {
 
 local Settings = {
     AutoTp = true,
-    AutoWalk = true,   -- nur UI
+    AutoWalk = true,  -- nur UI
     AutoClone = true,
     TpToBrainrotAfter = false,
     TpAfterHit = false,
@@ -199,20 +203,25 @@ local function IsBrainrotInDuel(targetData)
 end
 
 -------------------------------------------------
--- Nur PrioritySystem → GetBestTarget
+-- NUR PrioritySystem, aber mit Wait (0.5–1.5s)
 -------------------------------------------------
 
 local function GetBestTarget()
+    local t0 = tick()
     local PS = getgenv().PrioritySystem
-    if not PS or not PS.SelectedData then
+
+    -- Warte bis zu 1.5s, damit PRIOR‑Script laden kann
+    while (not PS or not PS.SelectedData or not PS.SelectedData.plot or not PS.SelectedData.slot)
+      and tick() - t0 < 1.5 do
+        task.wait(0.05)
+        PS = getgenv().PrioritySystem
+    end
+
+    if not PS or not PS.SelectedData or not PS.SelectedData.plot or not PS.SelectedData.slot then
         return nil, nil, false
     end
 
-    local sel = PS.SelectedData
-    if not sel.plot or not sel.slot then
-        return nil, nil, false
-    end
-
+    local sel        = PS.SelectedData
     local targetPart = findAdorneeGlobal(sel)
     if not targetPart then return nil, nil, false end
 
@@ -220,7 +229,7 @@ local function GetBestTarget()
 end
 
 -------------------------------------------------
--- Notifications
+-- ShowNotification
 -------------------------------------------------
 
 local function ShowNotification(text, customColor)
@@ -344,7 +353,7 @@ local function PerformVelocityFloat(targetPart, ignoreRagdoll)
                     return
                 end
                 local tChar = LP.Character
-                local tHrp  = tChar and tHrp or (tChar and tChar:FindFirstChild("HumanoidRootPart"))
+                local tHrp  = tChar and tChar:FindFirstChild("HumanoidRootPart")
                 if tHrp then
                     invisibleFloor.CanCollide = tHrp.Position.Y > invisibleFloor.Position.Y + 1.5
                 end
@@ -445,7 +454,7 @@ local function QuickWallCheck(hum, hrp)
     bv:Destroy()
 
     local endPos  = hrp.Position
-    local movedXZ = (Vector3.new(endPos.X,0,endPos.Z) - Vector3.new(startPos.X,0,startPos.Z)).Magnitude
+    local movedXZ = (Vector2.new(endPos.X, endPos.Z) - Vector2.new(startPos.X, startPos.Z)).Magnitude
 
     hrp.CFrame = startCFrame
     hrp.AssemblyLinearVelocity  = Vector3.zero
@@ -518,9 +527,9 @@ local function TriggerTpAfterHit()
 end
 
 local function OnCharacterSpawn(char)
-    LastRagdollTime      = 0
-    AllowTpAfterRagdoll  = false
-    local hum            = char:WaitForChild("Humanoid", 5)
+    LastRagdollTime        = 0
+    AllowTpAfterRagdoll    = false
+    local hum              = char:WaitForChild("Humanoid", 5)
     if hum then 
         savedHipHeight = hum.HipHeight
         hum.StateChanged:Connect(function(_, new)
@@ -632,7 +641,6 @@ local function ExecuteFlow(showNotification, isManual)
         local targetHeight  = math.max(targetBasePos.Y, minHeight)
         savedYPosition      = targetHeight  
 
-        -- Hochziehen
         getgenv().SMKT_DISABLE_VELOCITY = true
         local jumpStart = tick()
         while HRP.Position.Y < targetHeight and (tick() - jumpStart) < 3 do
@@ -645,7 +653,6 @@ local function ExecuteFlow(showNotification, isManual)
         end
         getgenv().SMKT_DISABLE_VELOCITY = false
 
-        -- an Base-Position snappen
         for i = 1, 10 do
             if not IsAlive() or IsRagdolled(Hum) then isRunning=false;isTpMoving=false;return end 
             HRP.AssemblyLinearVelocity = Vector3.new(HRP.AssemblyLinearVelocity.X, 0, HRP.AssemblyLinearVelocity.Z)
@@ -655,7 +662,6 @@ local function ExecuteFlow(showNotification, isManual)
             end
         end
 
-        -- Unterer Floor: Position vor Plot (für Laser/Clone)
         if not isSecondFloor then
             local bestSpot = CLONE_POSITIONS_FLOOR[1]
             local minDst   = math.huge
@@ -672,7 +678,6 @@ local function ExecuteFlow(showNotification, isManual)
             end
         end
 
-        -- FACE_TARGET: Richtung Wand drehen
         local bestFace    = FACE_TARGETS[1]
         local minFaceDist = math.huge
         for _, v in ipairs(FACE_TARGETS) do
@@ -689,7 +694,6 @@ local function ExecuteFlow(showNotification, isManual)
         HRP.CFrame      = CFrame.lookAt(HRP.Position, Vector3.new(bestFace.X, HRP.Position.Y, bestFace.Z))
         savedYPosition  = HRP.Position.Y  
 
-        -- OBERER FLOOR: perfekter Wand-TP + 0.2s Stabilisierung VOR dem Clone
         if isSecondFloor then
             local hit = RaycastWallFromChest(80)
             if hit then
@@ -698,10 +702,8 @@ local function ExecuteFlow(showNotification, isManual)
                 local y       = HRP.Position.Y
                 local wallPos = Vector3.new(hitPos.X, y, hitPos.Z)
 
-                -- direkt an die Wand
                 HRP.CFrame = CFrame.lookAt(wallPos, wallPos + dir)
 
-                -- 0.2s „an der Wand locken“ (kein Clone!)
                 local settleStart = tick()
                 while tick() - settleStart < 0.2 do
                     if not IsAlive() or IsRagdolled(Hum) then
