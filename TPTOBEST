@@ -6,7 +6,7 @@ local ReplicatedStorage   = game:GetService("ReplicatedStorage")
 local TweenService        = game:GetService("TweenService")
 local RunService          = game:GetService("RunService")
 local UserInputService    = game:GetService("UserInputService")
-local HttpService          = game:GetService("HttpService")
+local HttpService         = game:GetService("HttpService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local GuiService          = game:GetService("GuiService")
 
@@ -37,7 +37,7 @@ local BASES_HIGH = {
     [1] = Vector3.new(-476.474853515625, 20.732906341552734, 220.94090270996094), [5] = Vector3.new(-342.5367126464844, 20.69801902770996, 221.44737243652344),
     [2] = Vector3.new(-476.5684814453125, 20.70664405822754, 113.77315521240234), [6] = Vector3.new(-342.8604736328125, 20.669641494750977, 113.41409301757812),
     [3] = Vector3.new(-476.8675842285156, 20.74148178100586, 6.178487777709961),  [7] = Vector3.new(-342.42108154296875, 20.687667846679688, 6.249461650848389),
-    [4] = Vector3.new(-476.6324768066406, 20.744949340820312, -101.07275390625), [8] = Vector3.new(-342.7937927246094, 20.748071670532227, -99.73458862304688)
+    [4] = Vector3.new(-476.6324768066406, 20.744949340820312, -101.07275390625),  [8] = Vector3.new(-342.7937927246094, 20.748071670532227, -99.73458862304688)
 }
 
 local CLONE_POSITIONS_FLOOR = {
@@ -87,6 +87,50 @@ local LastRagdollTime     = 0
 local RagdollCooldown     = 0.5
 local AllowTpAfterRagdoll = false
 local savedHipHeight      = 2.5
+
+local positionHistory     = {}
+local posHistoryConn      = nil
+
+local function startPositionTracking()
+    if posHistoryConn then return end
+    positionHistory = {}
+    posHistoryConn = RunService.Heartbeat:Connect(function()
+        local c   = LP.Character
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        table.insert(positionHistory, {pos = hrp.Position, t = tick()})
+        local cutoff = tick() - 1.5
+        while positionHistory[1] and positionHistory[1].t < cutoff do
+            table.remove(positionHistory, 1)
+        end
+    end)
+end
+
+local function stopPositionTracking()
+    if posHistoryConn then
+        posHistoryConn:Disconnect()
+        posHistoryConn = nil
+    end
+    positionHistory = {}
+end
+
+local function wasLaggedBack(targetPos, threshold)
+    threshold = threshold or 5
+    if #positionHistory < 5 then return false end
+    local c   = LP.Character
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    local currentPos = hrp.Position
+    local distToTarget = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
+    if distToTarget < threshold then return false end
+    local oldest = positionHistory[1]
+    local newest = positionHistory[#positionHistory]
+    local totalMovement = (newest.pos - oldest.pos).Magnitude
+    if totalMovement < 2 then
+        return true
+    end
+    return false
+end
 
 local function IsAlive()
     local c = LP.Character
@@ -187,9 +231,7 @@ local function ShowNotification(text, customColor)
                 if not NotifFrame.Visible then break end
                 local brightness = 1 - (math.sin(i * math.pi) * 0.4)
                 if not customColor then
-                    NotifText.TextColor3 = Color3.fromRGB(
-                        255 * brightness, 255 * brightness, 255 * brightness
-                    )
+                    NotifText.TextColor3 = Color3.fromRGB(255*brightness, 255*brightness, 255*brightness)
                 end
                 task.wait(0.03)
             end
@@ -250,9 +292,7 @@ _G._isTargetPlotUnlocked = function(plotName)
             elseif item:IsA("BasePart") then
                 pos = item.Position
             end
-            if pos then
-                table.insert(unlockItems, {Object = item, Height = pos.Y})
-            end
+            if pos then table.insert(unlockItems, {Object = item, Height = pos.Y}) end
         end
         table.sort(unlockItems, function(a, b) return a.Height < b.Height end)
         if #unlockItems == 0 then return true end
@@ -351,13 +391,13 @@ local function clickTpButton(tpButton)
     else
         local inset = GuiService:GetGuiInset()
         local pos   = tpButton.AbsolutePosition + tpButton.AbsoluteSize * 0.5
-        VirtualInputManager:SendMouseButtonEvent(pos.X + inset.X, pos.Y + inset.Y, 0, true,  game, 1)
+        VirtualInputManager:SendMouseButtonEvent(pos.X+inset.X, pos.Y+inset.Y, 0, true,  game, 1)
         task.wait(0.05)
-        VirtualInputManager:SendMouseButtonEvent(pos.X + inset.X, pos.Y + inset.Y, 0, false, game, 1)
+        VirtualInputManager:SendMouseButtonEvent(pos.X+inset.X, pos.Y+inset.Y, 0, false, game, 1)
     end
 end
 
-local function instantClone()
+local function instantClone(targetPos)
     if _G.isCloning then return false end
     _G.isCloning = true
     local success = false
@@ -365,14 +405,33 @@ local function instantClone()
         local char = LP.Character
         local hum  = char and char:FindFirstChildOfClass("Humanoid")
         if not (char and hum) then return end
+
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+
+        if targetPos and wasLaggedBack(targetPos, 5) then
+            return
+        end
+
         local cloner = LP.Backpack:FindFirstChild(TOOL_NAME) or char:FindFirstChild(TOOL_NAME)
         if not cloner then return end
         pcall(function() hum:EquipTool(cloner) end)
         task.wait(0.1)
+
+        if targetPos and wasLaggedBack(targetPos, 5) then
+            return
+        end
+
         pcall(function() cloner:Activate() end)
         task.wait(0.1)
+
         local cloneFound = waitForClone(5)
         if not cloneFound then return end
+
+        if targetPos and wasLaggedBack(targetPos, 5) then
+            return
+        end
+
         local tpButton = nil
         local deadline = tick() + 2
         while tick() < deadline do
@@ -383,6 +442,11 @@ local function instantClone()
             task.wait(0.05)
         end
         if not tpButton then return end
+
+        if targetPos and wasLaggedBack(targetPos, 5) then
+            return
+        end
+
         clickTpButton(tpButton)
         success = true
     end)
@@ -488,6 +552,13 @@ LP:GetAttributeChangedSignal("RagdollEndTime"):Connect(function()
     TriggerTpAfterHit()
 end)
 
+startPositionTracking()
+LP.CharacterAdded:Connect(function()
+    stopPositionTracking()
+    task.wait(0.5)
+    startPositionTracking()
+end)
+
 local function runAutoSnipe()
     if isTpMoving then return end
     local char = LP.Character
@@ -509,21 +580,35 @@ local function runAutoSnipe()
     if targetPetData.name then
         ShowNotification(tostring(targetPetData.name) .. " detected!")
     end
-    local exactPos = targetPart.Position
-    local carpet   = LP.Backpack:FindFirstChild(CARPET_NAME) or char:FindFirstChild(CARPET_NAME)
+    local exactPos    = targetPart.Position
+    local targetPos2D = Vector3.new(exactPos.X, 0, exactPos.Z)
+
+    local carpet = LP.Backpack:FindFirstChild(CARPET_NAME) or char:FindFirstChild(CARPET_NAME)
     if carpet then hum:EquipTool(carpet) end
     task.wait(0.01)
     if not IsAlive() or IsRagdolled(hum) then isTpMoving = false return end
+
     local isSecondFloor = exactPos.Y > 10
     local plotIndex     = getClosestBaseIdx(exactPos)
     local targetBasePos = isSecondFloor and BASES_HIGH[plotIndex] or BASES_LOW[plotIndex]
     local targetHeight  = math.max(targetBasePos.Y, 50)
+
+    local posBeforeJump = hrp.Position
+
     local jumpStart = tick()
     while hrp.Position.Y < targetHeight and (tick() - jumpStart) < 3 do
         if not IsAlive() or IsRagdolled(hum) then isTpMoving = false return end
         hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, 200, hrp.AssemblyLinearVelocity.Z)
         RunService.Heartbeat:Wait()
     end
+
+    task.wait(0.1)
+    if wasLaggedBack(targetBasePos, 5) then
+        isTpMoving = false
+        ShowNotification("Lagback detected, aborting.", Color3.fromRGB(255, 80, 80))
+        return
+    end
+
     for i = 1, 10 do
         if not IsAlive() or IsRagdolled(hum) then isTpMoving = false return end
         hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, 0, hrp.AssemblyLinearVelocity.Z)
@@ -532,6 +617,14 @@ local function runAutoSnipe()
             task.wait(0.05)
         end
     end
+
+    task.wait(0.05)
+    if wasLaggedBack(targetBasePos, 5) then
+        isTpMoving = false
+        ShowNotification("Lagback detected, aborting.", Color3.fromRGB(255, 80, 80))
+        return
+    end
+
     if not isSecondFloor then
         local bestSpot = CLONE_POSITIONS_FLOOR[1]
         local minDst   = math.huge
@@ -546,27 +639,55 @@ local function runAutoSnipe()
                 task.wait(0.05)
             end
         end
+
+        task.wait(0.05)
+        if wasLaggedBack(bestSpot, 5) then
+            isTpMoving = false
+            ShowNotification("Lagback detected, aborting.", Color3.fromRGB(255, 80, 80))
+            return
+        end
     end
+
     local bestFace    = FACE_TARGETS[1]
     local minFaceDist = math.huge
     for _, v in ipairs(FACE_TARGETS) do
         local d = (hrp.Position - v).Magnitude
         if d < minFaceDist then minFaceDist = d; bestFace = v end
     end
+
     task.wait(0.1)
     if not IsAlive() or IsRagdolled(hum) then isTpMoving = false return end
     hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(bestFace.X, hrp.Position.Y, bestFace.Z))
+
+    local cloneTargetPos = hrp.Position
+
     if isSecondFloor or not _G._isTargetPlotUnlocked(targetPetData.plot) then
         if not IsAlive() or IsRagdolled(hum) then isTpMoving = false return end
         walkForward(0.4)
         task.wait(0.4)
         if not IsAlive() or IsRagdolled(hum) then isTpMoving = false return end
-        instantClone()
+
+        if wasLaggedBack(cloneTargetPos, 5) then
+            isTpMoving = false
+            ShowNotification("Lagback detected, aborting clone.", Color3.fromRGB(255, 80, 80))
+            return
+        end
+
+        instantClone(cloneTargetPos)
         task.wait(0.3)
+
+        if wasLaggedBack(cloneTargetPos, 5) then
+            isTpMoving = false
+            ShowNotification("Lagback after clone, aborting.", Color3.fromRGB(255, 80, 80))
+            return
+        end
     end
+
     if not IsAlive() or IsRagdolled(hum) then isTpMoving = false return end
     if carpet then hum:EquipTool(carpet) end
+
     local verticalDiff = targetPart.Position.Y - hrp.Position.Y
+
     if verticalDiff > 2 then
         local airPos = Vector3.new(targetPart.Position.X, targetPart.Position.Y - 8, targetPart.Position.Z)
         local plat = Instance.new("Part")
@@ -604,12 +725,9 @@ local function runAutoSnipe()
             task.wait(0.05)
         end
     end
+
     isTpMoving = false
 end
-
--------------------------------------------------
--- UI
--------------------------------------------------
 
 if PlayerGui:FindFirstChild("TPPanel_Lethal") then
     PlayerGui.TPPanel_Lethal:Destroy()
@@ -623,7 +741,7 @@ ScreenGui.Parent         = PlayerGui
 
 local Main = Instance.new("Frame")
 Main.Name             = "Main"
-Main.Size             = UDim2.new(0, 270, 0, 340)
+Main.Size             = UDim2.new(0, 270, 0, 339)
 Main.Position         = UDim2.new(1, -285, 0, 50)
 Main.BackgroundColor3 = Color3.fromRGB(12, 12, 14)
 Main.BorderSizePixel  = 0
@@ -659,7 +777,6 @@ Divider.Position         = UDim2.new(0.05, 0, 0, 34)
 Divider.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
 Divider.BorderSizePixel  = 0
 
--- TP Button
 local TpButton = Instance.new("TextButton")
 TpButton.Size             = UDim2.new(0.9, 0, 0, 40)
 TpButton.Position         = UDim2.new(0.05, 0, 0, 40)
@@ -673,14 +790,13 @@ TpButton.Parent           = Main
 Instance.new("UICorner", TpButton).CornerRadius = UDim.new(0, 8)
 Instance.new("UIStroke", TpButton).Color        = Color3.fromRGB(40, 40, 48)
 TpButton.MouseEnter:Connect(function()
-    TweenService:Create(TpButton, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(35, 35, 42)}):Play()
+    TweenService:Create(TpButton, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(35,35,42)}):Play()
 end)
 TpButton.MouseLeave:Connect(function()
-    TweenService:Create(TpButton, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(25, 25, 30)}):Play()
+    TweenService:Create(TpButton, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(25,25,30)}):Play()
 end)
 TpButton.MouseButton1Click:Connect(function() task.spawn(runAutoSnipe) end)
 
--- TP Key bind  (Y=88)
 local KeybindFrame = Instance.new("Frame")
 KeybindFrame.Size             = UDim2.new(0.9, 0, 0, 30)
 KeybindFrame.Position         = UDim2.new(0.05, 0, 0, 88)
@@ -717,7 +833,6 @@ KeybindButton.TextSize           = 11
 KeybindButton.Text               = Settings.TpKey or "T"
 KeybindButton.Parent             = KeybindBg
 
--- TpAfterHit Toggle  (Y=126)
 local TpAfterHitFrame = Instance.new("Frame")
 TpAfterHitFrame.Size             = UDim2.new(0.9, 0, 0, 36)
 TpAfterHitFrame.Position         = UDim2.new(0.05, 0, 0, 126)
@@ -760,13 +875,13 @@ TpAfterHitBtn.Parent             = TpAfterHitToggleBg
 
 local function updateTpAfterHitVisual()
     if Settings.TpAfterHit then
-        TweenService:Create(TpAfterHitCircle, TweenInfo.new(0.2), {Position = UDim2.new(0,22,0.5,-8), BackgroundColor3 = Color3.fromRGB(200,200,210)}):Play()
-        TweenService:Create(TpAfterHitToggleBg, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(55,55,65)}):Play()
-        TweenService:Create(TpAfterHitLabel, TweenInfo.new(0.2), {TextColor3 = Color3.fromRGB(220,220,230)}):Play()
+        TweenService:Create(TpAfterHitCircle, TweenInfo.new(0.2), {Position=UDim2.new(0,22,0.5,-8),BackgroundColor3=Color3.fromRGB(200,200,210)}):Play()
+        TweenService:Create(TpAfterHitToggleBg, TweenInfo.new(0.2), {BackgroundColor3=Color3.fromRGB(55,55,65)}):Play()
+        TweenService:Create(TpAfterHitLabel, TweenInfo.new(0.2), {TextColor3=Color3.fromRGB(220,220,230)}):Play()
     else
-        TweenService:Create(TpAfterHitCircle, TweenInfo.new(0.2), {Position = UDim2.new(0,2,0.5,-8), BackgroundColor3 = Color3.fromRGB(80,80,90)}):Play()
-        TweenService:Create(TpAfterHitToggleBg, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(35,35,40)}):Play()
-        TweenService:Create(TpAfterHitLabel, TweenInfo.new(0.2), {TextColor3 = Color3.fromRGB(170,170,180)}):Play()
+        TweenService:Create(TpAfterHitCircle, TweenInfo.new(0.2), {Position=UDim2.new(0,2,0.5,-8),BackgroundColor3=Color3.fromRGB(80,80,90)}):Play()
+        TweenService:Create(TpAfterHitToggleBg, TweenInfo.new(0.2), {BackgroundColor3=Color3.fromRGB(35,35,40)}):Play()
+        TweenService:Create(TpAfterHitLabel, TweenInfo.new(0.2), {TextColor3=Color3.fromRGB(170,170,180)}):Play()
     end
 end
 updateTpAfterHitVisual()
@@ -776,7 +891,6 @@ TpAfterHitBtn.MouseButton1Click:Connect(function()
     SaveSettings()
 end)
 
--- Auto TP on Load Toggle  (Y=170)
 local AutoTpOnLoadFrame = Instance.new("Frame")
 AutoTpOnLoadFrame.Size             = UDim2.new(0.9, 0, 0, 36)
 AutoTpOnLoadFrame.Position         = UDim2.new(0.05, 0, 0, 170)
@@ -819,13 +933,13 @@ AutoTpOnLoadBtn.Parent             = AutoTpOnLoadToggleBg
 
 local function updateAutoTpOnLoadVisual()
     if Settings.AutoTpOnLoad then
-        TweenService:Create(AutoTpOnLoadCircle, TweenInfo.new(0.2), {Position = UDim2.new(0,22,0.5,-8), BackgroundColor3 = Color3.fromRGB(200,200,210)}):Play()
-        TweenService:Create(AutoTpOnLoadToggleBg, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(55,55,65)}):Play()
-        TweenService:Create(AutoTpOnLoadLabel, TweenInfo.new(0.2), {TextColor3 = Color3.fromRGB(220,220,230)}):Play()
+        TweenService:Create(AutoTpOnLoadCircle, TweenInfo.new(0.2), {Position=UDim2.new(0,22,0.5,-8),BackgroundColor3=Color3.fromRGB(200,200,210)}):Play()
+        TweenService:Create(AutoTpOnLoadToggleBg, TweenInfo.new(0.2), {BackgroundColor3=Color3.fromRGB(55,55,65)}):Play()
+        TweenService:Create(AutoTpOnLoadLabel, TweenInfo.new(0.2), {TextColor3=Color3.fromRGB(220,220,230)}):Play()
     else
-        TweenService:Create(AutoTpOnLoadCircle, TweenInfo.new(0.2), {Position = UDim2.new(0,2,0.5,-8), BackgroundColor3 = Color3.fromRGB(80,80,90)}):Play()
-        TweenService:Create(AutoTpOnLoadToggleBg, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(35,35,40)}):Play()
-        TweenService:Create(AutoTpOnLoadLabel, TweenInfo.new(0.2), {TextColor3 = Color3.fromRGB(170,170,180)}):Play()
+        TweenService:Create(AutoTpOnLoadCircle, TweenInfo.new(0.2), {Position=UDim2.new(0,2,0.5,-8),BackgroundColor3=Color3.fromRGB(80,80,90)}):Play()
+        TweenService:Create(AutoTpOnLoadToggleBg, TweenInfo.new(0.2), {BackgroundColor3=Color3.fromRGB(35,35,40)}):Play()
+        TweenService:Create(AutoTpOnLoadLabel, TweenInfo.new(0.2), {TextColor3=Color3.fromRGB(170,170,180)}):Play()
     end
 end
 updateAutoTpOnLoadVisual()
@@ -835,7 +949,6 @@ AutoTpOnLoadBtn.MouseButton1Click:Connect(function()
     SaveSettings()
 end)
 
--- Brainrot TP Key  (Y=214)
 local BrainrotKeyFrame = Instance.new("Frame")
 BrainrotKeyFrame.Size             = UDim2.new(0.9, 0, 0, 30)
 BrainrotKeyFrame.Position         = UDim2.new(0.05, 0, 0, 214)
@@ -872,7 +985,6 @@ BrainrotKeyButton.TextSize           = 11
 BrainrotKeyButton.Text               = Settings.TpToBrainrotKey or "G"
 BrainrotKeyButton.Parent             = BrainrotKeyBg
 
--- Clone Mode  (Y=252)
 local CloneModeFrame = Instance.new("Frame")
 CloneModeFrame.Size             = UDim2.new(0.9, 0, 0, 36)
 CloneModeFrame.Position         = UDim2.new(0.05, 0, 0, 252)
@@ -920,25 +1032,23 @@ Instance.new("UICorner", BadBtn).CornerRadius = UDim.new(0, 6)
 
 local function UpdateCloneModeUI()
     if Settings.CloneMode == "Good" then
-        GoodBtn.BackgroundColor3 = Color3.fromRGB(70,70,80); GoodBtn.TextColor3 = Color3.fromRGB(220,220,230)
-        BadBtn.BackgroundColor3  = Color3.fromRGB(30,30,35); BadBtn.TextColor3  = Color3.fromRGB(150,150,160)
+        GoodBtn.BackgroundColor3=Color3.fromRGB(70,70,80); GoodBtn.TextColor3=Color3.fromRGB(220,220,230)
+        BadBtn.BackgroundColor3=Color3.fromRGB(30,30,35);  BadBtn.TextColor3=Color3.fromRGB(150,150,160)
     else
-        BadBtn.BackgroundColor3  = Color3.fromRGB(70,70,80); BadBtn.TextColor3  = Color3.fromRGB(220,220,230)
-        GoodBtn.BackgroundColor3 = Color3.fromRGB(30,30,35); GoodBtn.TextColor3 = Color3.fromRGB(150,150,160)
+        BadBtn.BackgroundColor3=Color3.fromRGB(70,70,80);  BadBtn.TextColor3=Color3.fromRGB(220,220,230)
+        GoodBtn.BackgroundColor3=Color3.fromRGB(30,30,35); GoodBtn.TextColor3=Color3.fromRGB(150,150,160)
     end
 end
 UpdateCloneModeUI()
-GoodBtn.MouseButton1Click:Connect(function() Settings.CloneMode = "Good" SaveSettings() UpdateCloneModeUI() end)
-BadBtn.MouseButton1Click:Connect(function()  Settings.CloneMode = "Bad"  SaveSettings() UpdateCloneModeUI() end)
+GoodBtn.MouseButton1Click:Connect(function() Settings.CloneMode="Good" SaveSettings() UpdateCloneModeUI() end)
+BadBtn.MouseButton1Click:Connect(function()  Settings.CloneMode="Bad"  SaveSettings() UpdateCloneModeUI() end)
 
--- Divider 2  (Y=296)
 local Divider2 = Instance.new("Frame", Main)
 Divider2.Size             = UDim2.new(0.9, 0, 0, 1)
 Divider2.Position         = UDim2.new(0.05, 0, 0, 296)
 Divider2.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
 Divider2.BorderSizePixel  = 0
 
--- Status bar  (Y=305)
 local StatusBar = Instance.new("Frame")
 StatusBar.Size             = UDim2.new(0.9, 0, 0, 24)
 StatusBar.Position         = UDim2.new(0.05, 0, 0, 305)
@@ -966,63 +1076,55 @@ StatusText.TextSize           = 10
 StatusText.TextXAlignment     = Enum.TextXAlignment.Left
 StatusText.Parent             = StatusBar
 
--- Final height
-Main.Size = UDim2.new(0, 270, 0, 339)
-
--------------------------------------------------
--- Input
--------------------------------------------------
-
 local TpKeyCode             = Enum.KeyCode[Settings.TpKey] or Enum.KeyCode.T
 local TpBrainrotKeyCode     = Enum.KeyCode[Settings.TpToBrainrotKey] or Enum.KeyCode.G
 local waitingForTpKeybind   = false
 local waitingForBrainrotKey = false
 
 KeybindButton.MouseButton1Click:Connect(function()
-    waitingForTpKeybind = true; waitingForBrainrotKey = false
-    KeybindButton.Text = "..."; KeybindButton.TextColor3 = Color3.fromRGB(0,255,255)
+    waitingForTpKeybind=true; waitingForBrainrotKey=false
+    KeybindButton.Text="..."; KeybindButton.TextColor3=Color3.fromRGB(0,255,255)
 end)
 BrainrotKeyButton.MouseButton1Click:Connect(function()
-    waitingForBrainrotKey = true; waitingForTpKeybind = false
-    BrainrotKeyButton.Text = "..."; BrainrotKeyButton.TextColor3 = Color3.fromRGB(0,255,255)
+    waitingForBrainrotKey=true; waitingForTpKeybind=false
+    BrainrotKeyButton.Text="..."; BrainrotKeyButton.TextColor3=Color3.fromRGB(0,255,255)
 end)
 
 UserInputService.InputBegan:Connect(function(input, gpe)
     if gpe then return end
-    if waitingForTpKeybind and input.UserInputType == Enum.UserInputType.Keyboard then
-        waitingForTpKeybind = false
-        local keyName = input.KeyCode.Name
-        if keyName and keyName ~= "Unknown" then
-            Settings.TpKey = keyName; TpKeyCode = input.KeyCode
-            KeybindButton.Text = keyName; KeybindButton.TextColor3 = Color3.fromRGB(200,200,210)
-            TpButton.Text = "Teleport to Best (Key: " .. keyName .. ")"
+    if waitingForTpKeybind and input.UserInputType==Enum.UserInputType.Keyboard then
+        waitingForTpKeybind=false
+        local keyName=input.KeyCode.Name
+        if keyName and keyName~="Unknown" then
+            Settings.TpKey=keyName; TpKeyCode=input.KeyCode
+            KeybindButton.Text=keyName; KeybindButton.TextColor3=Color3.fromRGB(200,200,210)
+            TpButton.Text="Teleport to Best (Key: "..keyName..")"
             SaveSettings()
         else
-            KeybindButton.Text = Settings.TpKey or "T"; KeybindButton.TextColor3 = Color3.fromRGB(200,200,210)
+            KeybindButton.Text=Settings.TpKey or "T"; KeybindButton.TextColor3=Color3.fromRGB(200,200,210)
         end
         return
     end
-    if waitingForBrainrotKey and input.UserInputType == Enum.UserInputType.Keyboard then
-        waitingForBrainrotKey = false
-        local keyName = input.KeyCode.Name
-        if keyName and keyName ~= "Unknown" then
-            Settings.TpToBrainrotKey = keyName; TpBrainrotKeyCode = input.KeyCode
-            BrainrotKeyButton.Text = keyName; BrainrotKeyButton.TextColor3 = Color3.fromRGB(200,200,210)
+    if waitingForBrainrotKey and input.UserInputType==Enum.UserInputType.Keyboard then
+        waitingForBrainrotKey=false
+        local keyName=input.KeyCode.Name
+        if keyName and keyName~="Unknown" then
+            Settings.TpToBrainrotKey=keyName; TpBrainrotKeyCode=input.KeyCode
+            BrainrotKeyButton.Text=keyName; BrainrotKeyButton.TextColor3=Color3.fromRGB(200,200,210)
             SaveSettings()
         else
-            BrainrotKeyButton.Text = Settings.TpToBrainrotKey or "G"; BrainrotKeyButton.TextColor3 = Color3.fromRGB(200,200,210)
+            BrainrotKeyButton.Text=Settings.TpToBrainrotKey or "G"; BrainrotKeyButton.TextColor3=Color3.fromRGB(200,200,210)
         end
         return
     end
-    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
-    if input.KeyCode == TpKeyCode then
+    if input.UserInputType~=Enum.UserInputType.Keyboard then return end
+    if input.KeyCode==TpKeyCode then
         task.spawn(runAutoSnipe)
-    elseif input.KeyCode == TpBrainrotKeyCode then
+    elseif input.KeyCode==TpBrainrotKeyCode then
         task.spawn(function() TeleportToBrainrot() end)
     end
 end)
 
--- Status loop
 local hadPriorityLast = true
 task.spawn(function()
     while Main.Parent do
@@ -1030,48 +1132,41 @@ task.spawn(function()
         local sel         = PS and PS.SelectedData
         local hasPriority = sel and sel.name ~= nil
         if hasPriority then
-            PriorityStatus.Text       = "→ " .. tostring(sel.name)
-            PriorityStatus.TextColor3 = Color3.fromRGB(100, 200, 100)
+            PriorityStatus.Text=      "→ "..tostring(sel.name)
+            PriorityStatus.TextColor3=Color3.fromRGB(100,200,100)
         else
-            PriorityStatus.Text       = "No Priority Selected."
-            PriorityStatus.TextColor3 = Color3.fromRGB(200, 100, 100)
+            PriorityStatus.Text=      "No Priority Selected."
+            PriorityStatus.TextColor3=Color3.fromRGB(200,100,100)
             if hadPriorityLast then PlaySound("130511970684019") end
         end
-        hadPriorityLast = hasPriority
+        hadPriorityLast=hasPriority
         if isTpMoving then
-            StatusText.Text = "Running"; StatusDot.BackgroundColor3 = Color3.fromRGB(180,180,190)
+            StatusText.Text="Running"; StatusDot.BackgroundColor3=Color3.fromRGB(180,180,190)
         else
-            StatusText.Text = "Idle";    StatusDot.BackgroundColor3 = Color3.fromRGB(100,100,110)
+            StatusText.Text="Idle";    StatusDot.BackgroundColor3=Color3.fromRGB(100,100,110)
         end
         task.wait(1)
     end
 end)
 
--- Drag
 local dragging, dragStart, startPos
 Main.InputBegan:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1
-    or i.UserInputType == Enum.UserInputType.Touch then
-        dragging = true; dragStart = i.Position; startPos = Main.Position
+    if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+        dragging=true; dragStart=i.Position; startPos=Main.Position
     end
 end)
 UserInputService.InputChanged:Connect(function(input)
-    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-    or input.UserInputType == Enum.UserInputType.Touch) then
-        local delta = input.Position - dragStart
-        Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset+delta.X, startPos.Y.Scale, startPos.Y.Offset+delta.Y)
+    if dragging and (input.UserInputType==Enum.UserInputType.MouseMovement or input.UserInputType==Enum.UserInputType.Touch) then
+        local delta=input.Position-dragStart
+        Main.Position=UDim2.new(startPos.X.Scale,startPos.X.Offset+delta.X,startPos.Y.Scale,startPos.Y.Offset+delta.Y)
     end
 end)
 UserInputService.InputEnded:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1
-    or i.UserInputType == Enum.UserInputType.Touch then
-        dragging = false
+    if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+        dragging=false
     end
 end)
 
--------------------------------------------------
--- Auto TP on Load
--------------------------------------------------
 task.spawn(function()
     local char = LP.Character or LP.CharacterAdded:Wait()
     char:WaitForChild("HumanoidRootPart", 10)
