@@ -14,27 +14,13 @@ local GuiService          = game:GetService("GuiService")
 local LP = Players.LocalPlayer
 
 local Packages = ReplicatedStorage:WaitForChild("Packages")
-local Datas    = ReplicatedStorage:WaitForChild("Datas")
-local Shared   = ReplicatedStorage:WaitForChild("Shared")
-
-local Synchronizer  = require(Packages:WaitForChild("Synchronizer"))
-local AnimalsData   = require(Datas:WaitForChild("Animals"))
-local AnimalsShared = require(Shared:WaitForChild("Animals"))
+local Shared   = ReplicatedStorage:WaitForChild("Shared") -- nur falls du noch anderes Shared brauchst
+local Synchronizer = require(Packages:WaitForChild("Synchronizer"))
 
 local TOOL_NAME   = "Quantum Cloner"
 local CARPET_NAME = "Flying Carpet"
 
 local SAVE_KEY = "Schmeckt_TPPanel_FinalSave_" .. LP.UserId
-
-local PRIORITY_LIST = {
-   "Strawberry Elephant","Meowl","Skibidi Toilet","Headless Horseman","Dragon Gingerini","Dragon Cannelloni",
-   "Ketupat Bros","Hydra Dragon Cannelloni","La Supreme Combinasion","Love Love Bear","Ginger Gerat","Cerberus",
-   "Capitano Moby","La Casa Boo","Burguro and Fryuro","Spooky und Pumpky","Cooki und Milki","Rosey und Teddy",
-   "Popcuru und Fizzuru","Reinito Sleighito","Fragrama und Chocrama","Garama und Madundung","Ketchuru und Musturu",
-   "La Secret Combinasion","Tralaledon","Tictac Sahur","Ketupat Kepat","Tang Tang Keletang","Orcaledon",
-   "La Ginger Sekolah","Los Spaghettis","Lavadorito Spinito","Swaggy Bros","La Taco Combinasion","Los Primos",
-   "Chillin Chili","Tuff Toucan","W or L","Chipso und Queso"
-}
 
 local BASES_LOW = {
     [1] = Vector3.new(-460, -6, 219), [5] = Vector3.new(-355, -6, 217),
@@ -66,7 +52,7 @@ local FACE_TARGETS = {
 
 local Settings = {
     AutoTp = true,
-    AutoWalk = true,
+    AutoWalk = true,   -- nur UI
     AutoClone = true,
     TpToBrainrotAfter = false,
     TpAfterHit = false,
@@ -102,11 +88,8 @@ local LastRagdollTime    = 0
 local RagdollCooldown    = 0.5
 local AllowTpAfterRagdoll= false
 
-local allAnimalsCache    = {}
-local TeleportToBrainrot
-
 -------------------------------------------------
--- Basic Helpers
+-- Helpers
 -------------------------------------------------
 
 local function PlaySound(id)
@@ -191,44 +174,6 @@ local function findAdorneeGlobal(animalData)
     return nil
 end
 
--------------------------------------------------
--- Scan / Duel-Check
--------------------------------------------------
-
-local function scanPlots()
-    local plots = Workspace:FindFirstChild("Plots")
-    if not plots then 
-        allAnimalsCache = {}
-        return 
-    end
-
-    local temp = {}
-    for _, plot in ipairs(plots:GetChildren()) do
-        pcall(function()
-            local ch    = Synchronizer:Get(plot.Name)
-            local al    = ch and ch:Get("AnimalList")
-            local owner = ch and ch:Get("Owner")
-            if owner and owner.Name == LP.Name then return end
-            if owner and al then
-                for slot, ad in pairs(al) do
-                    if type(ad) == "table" and ad.Index then
-                        local gv = AnimalsShared:GetGeneration(ad.Index, ad.Mutation, ad.Traits, nil)
-                        table.insert(temp,{
-                            name     = ad.Index,
-                            genValue = gv,
-                            owner    = owner.Name,
-                            plot     = plot.Name,
-                            slot     = tostring(slot)
-                        })
-                    end
-                end
-            end
-        end)
-    end
-    table.sort(temp, function(a,b) return a.genValue > b.genValue end)
-    allAnimalsCache = temp
-end
-
 local function IsBrainrotInDuel(targetData)
     if not targetData or not targetData.plot then return false end
     local plots = Workspace:FindFirstChild("Plots")
@@ -254,50 +199,28 @@ local function IsBrainrotInDuel(targetData)
 end
 
 -------------------------------------------------
--- GetBestTarget (PrioritySystem + Fallback)
+-- Nur PrioritySystem → GetBestTarget
 -------------------------------------------------
 
 local function GetBestTarget()
-    local targetPetData = nil
-    local isPriority    = false
-    
     local PS = getgenv().PrioritySystem
-    if PS and PS.SelectedData and PS.SelectedData.plot and PS.SelectedData.slot then
-        targetPetData = PS.SelectedData
-        isPriority    = true
+    if not PS or not PS.SelectedData then
+        return nil, nil, false
     end
 
-    if not targetPetData then
-        scanPlots()
-
-        for _, pName in ipairs(PRIORITY_LIST) do
-            local search = pName:lower()
-            for _, a in ipairs(allAnimalsCache) do
-                if a and a.name and a.name:lower() == search then
-                    targetPetData = a
-                    isPriority    = true
-                    break
-                end
-            end
-            if targetPetData then break end
-        end
-
-        if not targetPetData and allAnimalsCache[1] then
-            targetPetData = allAnimalsCache[1]
-            isPriority    = false
-        end
+    local sel = PS.SelectedData
+    if not sel.plot or not sel.slot then
+        return nil, nil, false
     end
-    
-    if not targetPetData then return nil, nil, false end
-    
-    local targetPart = findAdorneeGlobal(targetPetData)
+
+    local targetPart = findAdorneeGlobal(sel)
     if not targetPart then return nil, nil, false end
-    
-    return targetPetData, targetPart, isPriority
+
+    return sel, targetPart, true
 end
 
 -------------------------------------------------
--- ShowNotification (war vorher NIL!)
+-- Notifications
 -------------------------------------------------
 
 local function ShowNotification(text, customColor)
@@ -421,7 +344,7 @@ local function PerformVelocityFloat(targetPart, ignoreRagdoll)
                     return
                 end
                 local tChar = LP.Character
-                local tHrp  = tChar and tChar:FindFirstChild("HumanoidRootPart")
+                local tHrp  = tChar and tHrp or (tChar and tChar:FindFirstChild("HumanoidRootPart"))
                 if tHrp then
                     invisibleFloor.CanCollide = tHrp.Position.Y > invisibleFloor.Position.Y + 1.5
                 end
@@ -570,6 +493,10 @@ TeleportToBrainrot = function(ignoreRagdoll)
     if hum and IsAlive() then hum.HipHeight = savedHipHeight end
 end
 
+-------------------------------------------------
+-- Ragdoll-Hook / SwapMonitor
+-------------------------------------------------
+
 local function TriggerTpAfterHit()
     if not Settings.TpAfterHit then return end
     if not AllowTpAfterRagdoll then return end
@@ -654,7 +581,7 @@ local function StartSwapMonitor()
 end
 
 -------------------------------------------------
--- ExecuteFlow mit Upper-Perfect-Logic
+-- ExecuteFlow mit Upper-Perfect-Clone
 -------------------------------------------------
 
 local function ExecuteFlow(showNotification, isManual)
@@ -771,8 +698,10 @@ local function ExecuteFlow(showNotification, isManual)
                 local y       = HRP.Position.Y
                 local wallPos = Vector3.new(hitPos.X, y, hitPos.Z)
 
+                -- direkt an die Wand
                 HRP.CFrame = CFrame.lookAt(wallPos, wallPos + dir)
 
+                -- 0.2s „an der Wand locken“ (kein Clone!)
                 local settleStart = tick()
                 while tick() - settleStart < 0.2 do
                     if not IsAlive() or IsRagdolled(Hum) then
@@ -858,17 +787,14 @@ local function ExecuteFlow(showNotification, isManual)
             end
         end
 
-        -- 0.25s nach Swap auf Upper Floor
         if isSecondFloor and didSwapInFlow then
             task.wait(0.25)
         end
 
-        -- Carpet zurück
         Equip(CARPET_NAME)
         task.wait(0.1)
         if not IsAlive() or IsRagdolled(Hum) then isRunning=false;isTpMoving=false;return end
 
-        -- Brainrot-TP/Float
         if isSecondFloor then
             local currentPos = HRP.Position
             local petPos     = targetPart.Position
@@ -1298,31 +1224,26 @@ UserInputService.InputEnded:Connect(function(i)
     end
 end)
 
-local hadHighValueLast = true
+local hadPriorityLast = true
 
 task.spawn(function()
     while Main.Parent do
-        scanPlots()
-        local PS      = getgenv().PrioritySystem
-        local hasHigh = false
+        local PS          = getgenv().PrioritySystem
+        local sel         = PS and PS.SelectedData
+        local hasPriority = sel and sel.name ~= nil
 
-        if PS and PS.SelectedData and PS.SelectedData.name then
-            PriorityStatus.Text      = "→ " .. tostring(PS.SelectedData.name)
+        if hasPriority then
+            PriorityStatus.Text      = "→ " .. tostring(sel.name)
             PriorityStatus.TextColor3= Color3.fromRGB(100, 200, 100)
-            hasHigh                  = true
-        elseif allAnimalsCache[1] then
-            PriorityStatus.Text      = "→ " .. (allAnimalsCache[1].name or "Unknown")
-            PriorityStatus.TextColor3= Color3.fromRGB(100, 200, 100)
-            hasHigh                  = true
         else
-            PriorityStatus.Text      = "No High Valueable Brainrot Found."
+            PriorityStatus.Text      = "No Priority Selected."
             PriorityStatus.TextColor3= Color3.fromRGB(200, 100, 100)
-            if hadHighValueLast then
+            if hadPriorityLast then
                 PlaySound("130511970684019")
             end
         end
 
-        hadHighValueLast = hasHigh
+        hadPriorityLast = hasPriority
         
         if isRunning or isTpMoving then
             StatusText.Text          = "Running"
