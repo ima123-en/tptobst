@@ -416,14 +416,14 @@ local function instantClone(targetPos)
         local cloner = LP.Backpack:FindFirstChild(TOOL_NAME) or char:FindFirstChild(TOOL_NAME)
         if not cloner then return end
         pcall(function() hum:EquipTool(cloner) end)
-        task.wait(0.05)
+        task.wait(0.1)
 
         if targetPos and wasLaggedBack(targetPos, 5) then
             return
         end
 
         pcall(function() cloner:Activate() end)
-        task.wait(0.05)
+        task.wait(0.1)
 
         local cloneFound = waitForClone(5)
         if not cloneFound then return end
