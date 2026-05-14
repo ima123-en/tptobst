@@ -402,14 +402,6 @@ local function isThirdFloor(targetPart)
     return targetPart.Position.Y > 35
 end
 
-local function doThirdFloorFloat(targetPart, _)
-    local char = LP.Character
-    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp or not targetPart then return end
-    hrp.AssemblyLinearVelocity = Vector3.zero
-    hrp.CFrame = CFrame.new(targetPart.Position + Vector3.new(0, 1, 0))
-end
-
 local function PerformVelocityFloat(targetPart, _)
     local char = LP.Character
     local hrp  = char and char:FindFirstChild("HumanoidRootPart")
@@ -597,13 +589,11 @@ local function getClosestBaseSignToPosition(worldPos)
     return closestPart
 end
 
-local function doubleSnapBrainrot(hrp, pos)
+local function safeSnap(hrp, pos)
     if not hrp then return end
-    for i = 1, 5 do
-        hrp.AssemblyLinearVelocity = Vector3.zero
-        hrp.CFrame = CFrame.new(pos)
-        task.wait(0.025)
-    end
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+    hrp.CFrame = CFrame.new(pos)
 end
 
 local function pirateV2ToClonePoint(targetPart, hum, hrp)
@@ -625,101 +615,53 @@ local function pirateV2ToClonePoint(targetPart, hum, hrp)
         and Vector3.new(chosenPoint.pos.X, 1, chosenPoint.pos.Z)
         or  chosenPoint.pos
     local signPart  = getClosestBaseSignToPosition(chosenTargetPos) or getClosestBaseSignToPosition(currentBrainrotPos)
-    local faceVector = nil
-    if signPart then
-        faceVector = chosenPoint.facing == "front"
-            and signPart.CFrame.LookVector
-            or -signPart.CFrame.LookVector
-        if faceVector.Magnitude <= 0 then
-            faceVector = nil
-        end
-    end
     local safeClonePos = chosenTargetPos
     if signPart then
         local wallDir = signPart.CFrame.LookVector
         safeClonePos = chosenTargetPos - wallDir.Unit * 1
     end
-    local camera        = Workspace.CurrentCamera
-    local prevCameraType= camera and camera.CameraType
-    local prevFov       = camera and camera.FieldOfView
-    local camConn       = nil
-    if faceVector then
-        hrp.AssemblyLinearVelocity = Vector3.zero
-        hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + faceVector)
-        hrp.AssemblyLinearVelocity = Vector3.zero
-    end
-    if camera then
-        camera.CameraType = Enum.CameraType.Scriptable
-        camera.FieldOfView = 95
-        camConn = RunService.RenderStepped:Connect(function()
-            local cHrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-            if cHrp and camera then
-                camera.CFrame = cHrp.CFrame * CFrame.new(0, 2, 10) * CFrame.Angles(math.rad(-5), 0, 0)
-            end
-        end)
-    end
-    local function stopCameraLock()
-        if camConn then
-            camConn:Disconnect()
-            camConn = nil
-        end
-        if camera then
-            if prevCameraType then camera.CameraType = prevCameraType end
-            if prevFov       then camera.FieldOfView  = prevFov end
-        end
-    end
-    local function finish(ok, reason, pos)
-        stopCameraLock()
-        return ok, reason, pos
-    end
+
     hrp.AssemblyLinearVelocity = Vector3.zero
     if hum and hum.Parent then
         hum:ChangeState(Enum.HumanoidStateType.Jumping)
     end
     task.wait(0.01)
     if not hrp or not hrp.Parent then
-        return finish(false, "hrp lost during jump start", nil)
+        return false, "hrp lost during jump start", nil
     end
     local medFlatPos = Vector3.new(medPoint.pos.X, hrp.Position.Y, medPoint.pos.Z)
     hrp.AssemblyLinearVelocity = Vector3.zero
-    hrp.CFrame = faceVector
-        and CFrame.new(medFlatPos, medFlatPos + faceVector)
-        or  CFrame.new(medFlatPos)
-    hrp.AssemblyLinearVelocity = Vector3.zero
+    safeSnap(hrp, medFlatPos)
     task.wait(0.1)
     if not hrp or not hrp.Parent then
-        return finish(false, "hrp lost after MED reposition", nil)
+        return false, "hrp lost after MED reposition", nil
     end
     local reachedMed = waitUntilHeartbeat(function()
         return hrp and hrp.Parent and flatDistanceV2(hrp.Position, medPoint.pos) <= 2.5
     end, 1.5)
     if not reachedMed then
-        return finish(false, "failed to reach MED point", nil)
+        return false, "failed to reach MED point", nil
     end
     local riseTargetY = 45
     riseToY(hrp, riseTargetY)
     hrp.AssemblyLinearVelocity = Vector3.zero
-    hrp.CFrame = faceVector
-        and CFrame.new(chosenTargetPos, chosenTargetPos + faceVector)
-        or  CFrame.new(chosenTargetPos)
+    safeSnap(hrp, chosenTargetPos)
     hrp.AssemblyLinearVelocity = Vector3.zero
     local reachedChosen = waitUntilHeartbeat(function()
         return hrp and hrp.Parent and (hrp.Position - chosenTargetPos).Magnitude <= 2.5
     end, 3.0)
     if not reachedChosen then
-        return finish(false, "failed to reach TP1-TP12", nil)
+        return false, "failed to reach TP1-TP12", nil
     end
     waitSecondsHeartbeat(0.15)
     if hrp and hrp.Parent then
         hrp.AssemblyLinearVelocity  = Vector3.zero
         hrp.AssemblyAngularVelocity = Vector3.zero
-        hrp.CFrame = faceVector
-            and CFrame.new(safeClonePos, safeClonePos + faceVector)
-            or  CFrame.new(safeClonePos)
+        safeSnap(hrp, safeClonePos)
         hrp.AssemblyLinearVelocity  = Vector3.zero
     end
     local finalPos = hrp and hrp.Parent and hrp.Position or nil
-    return finish(true, "ok", finalPos)
+    return true, "ok", finalPos
 end
 
 local function TriggerTpAfterHit()
@@ -728,8 +670,8 @@ local function TriggerTpAfterHit()
     if isTpMoving then return end
     if not IsAlive() then return end
     local now = tick()
-    if now - LastRagdollTime < RagdolCooldown then return end
-    LastRagdolCooldown = now
+    if now - LastRagdollTime < RagdollCooldown then return end
+    LastRagdollCooldown = now
     task.delay(0.15, function()
         if not IsAlive() then return end
         local h = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
@@ -820,9 +762,10 @@ local function runAutoSnipe()
     if not IsAlive() or IsRagdolled(hum) then isTpMoving = false return end
     if carpet then hum:EquipTool(carpet) end
     local verticalDiff = targetPart.Position.Y - hrp.Position.Y
+
     if isThirdFloor(targetPart) then
-        doubleSnapBrainrot(hrp, targetPart.Position + Vector3.new(0, 1, 0))
-        doThirdFloorFloat(targetPart, false)
+        local thirdFloorSafePos = targetPart.Position - Vector3.new(0, 4, 0)
+        safeSnap(hrp, thirdFloorSafePos)
     elseif verticalDiff > 2 then
         local airPos = Vector3.new(targetPart.Position.X, targetPart.Position.Y - 6, targetPart.Position.Z)
         local plat = Instance.new("Part")
@@ -836,11 +779,11 @@ local function runAutoSnipe()
         plat.Transparency = 0.3
         plat.Parent = Workspace
         RunService.Heartbeat:Wait()
-        for i = 1, 10 do
+        for i = 1, 5 do
             if not IsAlive() or IsRagdolled(hum) then break end
             if not LP:GetAttribute("Stealing") then
                 hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                hrp.CFrame = CFrame.new(airPos)
+                safeSnap(hrp, airPos)
                 task.wait(0.05)
             end
         end
@@ -853,11 +796,11 @@ local function runAutoSnipe()
             end
             plat:Destroy()
         end)
-        doubleSnapBrainrot(hrp, targetPart.Position + Vector3.new(0, 1, 0))
+        safeSnap(hrp, targetPart.Position + Vector3.new(0, 1, 0))
         PerformVelocityFloat(targetPart, false)
     else
         if IsAlive() and not IsRagdolled(hum) and not LP:GetAttribute("Stealing") then
-            doubleSnapBrainrot(hrp, targetPart.Position)
+            safeSnap(hrp, targetPart.Position)
         end
     end
     isTpMoving = false
@@ -1303,19 +1246,45 @@ UserInputService.InputEnded:Connect(function(i)
     end
 end)
 
+local function characterIsStableFor(sec, maxDelta)
+    local char = LP.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    local hum  = char and char:FindFirstChildOfClass("Humanoid")
+    if not (char and hrp and hum) then return false end
+    if not IsAlive() or IsRagdolled(hum) or IsUnderRoof() then return false end
+    local startPos = hrp.Position
+    local t = 0
+    while t < sec do
+        local dt = RunService.Heartbeat:Wait()
+        t += dt
+        local newPos = hrp.Position
+        if (newPos - startPos).Magnitude > maxDelta then
+            return false
+        end
+    end
+    return true
+end
+
 task.spawn(function()
     local char = LP.Character or LP.CharacterAdded:Wait()
     char:WaitForChild("HumanoidRootPart", 5)
     char:WaitForChild("Humanoid", 5)
-    task.wait(0.3)
     if not Settings.AutoTpOnLoad then return end
+    local totalTimeout = 3
     local t0 = tick()
-    while tick() - t0 < 3 do
-        local targetData, targetPart = GetBestTarget()
-        if targetPart and targetData and targetData.name then
-            runAutoSnipe()
-            return
+    local didRun = false
+    while tick() - t0 < totalTimeout do
+        if characterIsStableFor(0.8, 2) then
+            local targetData, targetPart = GetBestTarget()
+            if targetPart and targetData and targetData.name then
+                runAutoSnipe()
+                didRun = true
+                break
+            end
         end
-        task.wait(0.1)
+        task.wait(0.2)
+    end
+    if not didRun then
+        return
     end
 end)
