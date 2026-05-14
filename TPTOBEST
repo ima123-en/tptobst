@@ -54,17 +54,38 @@ local FACE_TARGETS = {
     Vector3.new(-302, -3, 114), Vector3.new(-300, -3, 220)
 }
 
+local TP_V2_MED_POINTS = {
+    {name = "MED1", pos = Vector3.new(-410.65, -5.68, -46.10)},
+    {name = "MED2", pos = Vector3.new(-410.91, -5.68, 168.89)},
+}
+
+local TP_V2_SECOND_FLOOR_POINTS = {
+    {name = "TP1",  pos = Vector3.new(-488.88, 15, 196.38), facing = "back"},
+    {name = "TP2",  pos = Vector3.new(-487.79, 15, 138.13), facing = "front"},
+    {name = "TP3",  pos = Vector3.new(-489.38, 15, 89.23),  facing = "back"},
+    {name = "TP4",  pos = Vector3.new(-489.69, 15, 30.98),  facing = "front"},
+    {name = "TP5",  pos = Vector3.new(-488.75, 15, -17.95), facing = "back"},
+    {name = "TP6",  pos = Vector3.new(-490,    15, -75.90), facing = "front"},
+    {name = "TP7",  pos = Vector3.new(-331.75, 15, -75.80), facing = "back"},
+    {name = "TP8",  pos = Vector3.new(-329.98, 15, -18.16), facing = "front"},
+    {name = "TP9",  pos = Vector3.new(-330.04, 15, 31.14),  facing = "back"},
+    {name = "TP10", pos = Vector3.new(-331.28, 15, 88.92),  facing = "front"},
+    {name = "TP11", pos = Vector3.new(-330.57, 15, 138.10), facing = "back"},
+    {name = "TP12", pos = Vector3.new(-330.01, 15, 195.96), facing = "front"},
+}
+
+local TP_V2_ALLOWED_BY_MED = {
+    MED1 = {TP6 = true, TP7 = true, TP8 = true, TP10 = true, TP12 = true, TP5 = true, TP3 = true, TP1 = true},
+    MED2 = {TP1 = true, TP2 = true, TP4 = true, TP6 = true, TP7 = true, TP9 = true, TP11 = true, TP12 = true},
+}
+
 local Settings = {
     TpKey           = "T",
     TpAfterHit      = false,
     TpToBrainrotKey = "G",
     CloneMode       = "Good",
     AutoTpOnLoad    = true,
-    AutoOpenOnLoad  = true,
-    GuiScale        = 50,
 }
-
-local isInteractingWithSlider = false
 
 local function SaveSettings()
     pcall(function()
@@ -132,7 +153,9 @@ local function wasLaggedBack(targetPos, threshold)
     local oldest = positionHistory[1]
     local newest = positionHistory[#positionHistory]
     local totalMovement = (newest.pos - oldest.pos).Magnitude
-    if totalMovement < 2 then return true end
+    if totalMovement < 2 then
+        return true
+    end
     return false
 end
 
@@ -286,7 +309,7 @@ _G._isTargetPlotUnlocked = function(plotName)
         if not plots then return false end
         local targetPlot = plots:FindFirstChild(plotName)
         if not targetPlot then return false end
-        local unlockFolder = targetPlot:FindFirstChild("Unlock")
+        local unlockFolder = targetPlot:FindChild("Unlock")
         if not unlockFolder then return true end
         local unlockItems = {}
         for _, item in pairs(unlockFolder:GetChildren()) do
@@ -361,6 +384,40 @@ local function walkForward(seconds)
     end)
 end
 
+local function TeleportToBrainrot(skipAutoSnipe)
+    if _G.TeleportToBrainrot and type(_G.TeleportToBrainrot) == "function" then
+        return _G.TeleportToBrainrot(skipAutoSnipe)
+    end
+    if not skipAutoSnipe then
+        task.spawn(function()
+            if _G.runAutoSnipe and type(_G.runAutoSnipe) == "function" then
+                _G.runAutoSnipe()
+            end
+        end)
+    end
+end
+
+local function isThirdFloor(targetPart)
+    if not targetPart or not targetPart.Position then return false end
+    return targetPart.Position.Y > 35
+end
+
+local function doThirdFloorFloat(targetPart, _)
+    local char = LP.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp or not targetPart then return end
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.CFrame = CFrame.new(targetPart.Position + Vector3.new(0, 1, 0))
+end
+
+local function PerformVelocityFloat(targetPart, _)
+    local char = LP.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp or not targetPart then return end
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.CFrame = CFrame.new(targetPart.Position + Vector3.new(0, 1, 0))
+end
+
 local function waitForClone(timeoutSecs)
     local cloneName = tostring(LP.UserId) .. "_Clone"
     if Workspace:FindFirstChild(cloneName) then return true end
@@ -380,7 +437,7 @@ local function waitForClone(timeoutSecs)
     while not found and tick() < deadline do
         task.wait(0.05)
     end
-    pcall(function() conn:Disconnect() end)
+    pcall(function() if conn then conn:Disconnect() end end)
     return found
 end
 
@@ -440,118 +497,229 @@ local function instantClone(targetPos)
     return success
 end
 
-local function PerformVelocityFloat(targetPart, ignoreRagdoll)
-    if not IsAlive() then return end
-    local c   = LP.Character
-    local hrp = c and c:FindFirstChild("HumanoidRootPart")
-    local hum = c and c:FindFirstChildOfClass("Humanoid")
-    if not hrp or not targetPart or not hum then return end
-    if not ignoreRagdoll and IsRagdolled(hum) then return end
-    local petPos = targetPart.Position
-    hrp.CFrame = CFrame.new(Vector3.new(petPos.X, hrp.Position.Y, petPos.Z))
-    task.wait(0.1)
-    if not IsAlive() or (not ignoreRagdoll and IsRagdolled(hum)) then return end
-    local params = RaycastParams.new()
-    params.FilterDescendantsInstances = {c, Workspace.CurrentCamera}
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    local targetY    = petPos.Y
-    local floatStart = tick()
-    while tick() - floatStart < 4 do
-        if not IsAlive() or (not ignoreRagdoll and IsRagdolled(hum)) then break end
-        if IsHoldingBrainrot() or LP:GetAttribute("Stealing") then break end
-        if hrp.Position.Y >= targetY then hrp.AssemblyLinearVelocity = Vector3.zero break end
-        local head = c:FindFirstChild("Head") or hrp
-        local ray  = Workspace:Raycast(head.Position, Vector3.new(0, 3, 0), params)
-        if ray and ray.Instance and ray.Instance.CanCollide then
-            hrp.AssemblyLinearVelocity = Vector3.zero break
+local function flatDistanceV2(a, b)
+    return (Vector3.new(a.X, 0, a.Z) - Vector3.new(b.X, 0, b.Z)).Magnitude
+end
+
+local function getNearestTeleportV2MedPoint(fromPos)
+    local bestPoint = nil
+    local bestDist = math.huge
+    for _, entry in ipairs(TP_V2_MED_POINTS) do
+        local dist = flatDistanceV2(fromPos, entry.pos)
+        if dist < bestDist then
+            bestDist = dist
+            bestPoint = entry
         end
-        hrp.AssemblyLinearVelocity = Vector3.new(0, 35, 0)
+    end
+    return bestPoint, bestDist
+end
+
+local function getBestTeleportV2SecondFloorPoint(medPoint, brainrotPos)
+    local medPos = medPoint and medPoint.pos
+    local medName = medPoint and medPoint.name
+    if not medPos or not medName then return nil end
+    local allowed = TP_V2_ALLOWED_BY_MED[medName]
+    if not allowed then return nil end
+    local bestPoint = nil
+    local bestMedDist = math.huge
+    local bestBrainrotDist = math.huge
+    for _, entry in ipairs(TP_V2_SECOND_FLOOR_POINTS) do
+        if allowed[entry.name] then
+            local distToMed = flatDistanceV2(medPos, entry.pos)
+            local distToBrainrot = flatDistanceV2(brainrotPos, entry.pos)
+            if (distToBrainrot < bestBrainrotDist)
+                or (math.abs(distToBrainrot - bestBrainrotDist) <= 0.001 and distToMed < bestMedDist) then
+                bestPoint = entry
+                bestMedDist = distToMed
+                bestBrainrotDist = distToBrainrot
+            end
+        end
+    end
+    return bestPoint, bestMedDist, bestBrainrotDist
+end
+
+local function waitSecondsHeartbeat(sec)
+    local t = 0
+    while t < sec do
+        t += RunService.Heartbeat:Wait()
+    end
+end
+
+local function waitUntilHeartbeat(predicate, timeoutSec)
+    local t = 0
+    while true do
+        if predicate() then return true end
+        local dt = RunService.Heartbeat:Wait()
+        t += dt
+        if timeoutSec and t >= timeoutSec then
+            return false
+        end
+    end
+end
+
+local function riseToY(hrp, targetY)
+    if not hrp then return end
+    local MAX_TIME = 3.0
+    local start = os.clock()
+    while hrp.Parent and hrp.Position.Y < targetY do
+        local dist = targetY - hrp.Position.Y
+        local speed = math.clamp(dist * 20, 280, 310)
+        hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, speed, hrp.AssemblyLinearVelocity.Z)
+        if os.clock() - start > MAX_TIME then
+            break
+        end
         RunService.Heartbeat:Wait()
     end
-    if hrp then hrp.AssemblyLinearVelocity = Vector3.zero end
+    hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, 0, hrp.AssemblyLinearVelocity.Z)
 end
 
-local function isThirdFloor(targetPart)
-    return targetPart and targetPart.Position.Y > 20
-end
-
-local function doThirdFloorFloat(targetPart, ignoreRagdoll)
-    if not IsAlive() then return end
-    local c   = LP.Character
-    local hrp = c and c:FindFirstChild("HumanoidRootPart")
-    local hum = c and c:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hum then return end
-    local petPos = targetPart.Position
-    local airPos = Vector3.new(petPos.X, petPos.Y - 7.5, petPos.Z)
-    if _lastThirdFloorPlatform and _lastThirdFloorPlatform.Parent then
-        _lastThirdFloorPlatform:Destroy()
-    end
-    local plat = Instance.new("Part")
-    plat.Name = "XiTempPlatform3F"
-    plat.Size = Vector3.new(3, 1, 3)
-    plat.Position = airPos - Vector3.new(0, 4.5, 0)
-    plat.Color = Color3.new(1, 0, 0)
-    plat.Material = Enum.Material.Neon
-    plat.Anchored = true
-    plat.CanCollide = true
-    plat.Transparency = 0.3
-    plat.Parent = Workspace
-    _lastThirdFloorPlatform = plat
-    _lastThirdFloorTargetPart = targetPart
-    RunService.Heartbeat:Wait()
-    Equip(CARPET_NAME)
-    task.wait(0.05)
-    for _ = 1, 10 do
-        if not IsAlive() then break end
-        if not ignoreRagdoll and IsRagdolled(hum) then break end
-        if LP:GetAttribute("Stealing") then break end
-        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-        hrp.CFrame = CFrame.new(airPos)
-        task.wait(0.05)
-    end
-    PerformVelocityFloat(targetPart, ignoreRagdoll)
-    task.spawn(function()
-        local start = tick()
-        while tick() - start < 30 do
-            if LP:GetAttribute("Stealing") then break end
-            if not IsAlive() then break end
-            task.wait(0.1)
+local function getClosestBaseSignToPosition(worldPos)
+    local closestPart = nil
+    local closestDist = math.huge
+    for _, label in ipairs(Workspace:GetDescendants()) do
+        if label:IsA("TextLabel") then
+            local txt = tostring(label.Text or "")
+            if txt ~= "" and txt:lower():find("base", 1, true) then
+                local gui = label:FindFirstAncestorWhichIsA("SurfaceGui")
+                if gui then
+                    local part = gui.Adornee or gui.Parent
+                    if part and part:IsA("BasePart") then
+                        local dist = (part.Position - worldPos).Magnitude
+                        if dist < closestDist then
+                            closestDist = dist
+                            closestPart = part
+                        end
+                    end
+                end
+            end
         end
-        if plat and plat.Parent then plat:Destroy() end
-        if _lastThirdFloorPlatform == plat then
-            _lastThirdFloorPlatform = nil
-            _lastThirdFloorTargetPart = nil
-        end
-    end)
+    end
+    return closestPart
 end
 
-local function TeleportToBrainrot(ignoreRagdoll)
-    if not IsAlive() then return end
-    local c   = LP.Character
-    local hrp = c and c:FindFirstChild("HumanoidRootPart")
-    local hum = c and c:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hum then return end
-    if not ignoreRagdoll and IsRagdolled(hum) then return end
-    if IsHoldingBrainrot() or LP:GetAttribute("Stealing") then return end
-    local targetData, targetPart = GetBestTarget()
-    if not targetPart then return end
-    PlaySound("131661992591924")
-    if isThirdFloor(targetPart) then
-        doThirdFloorFloat(targetPart, ignoreRagdoll)
-        if hum and IsAlive() then hum.HipHeight = savedHipHeight end
-        return
+local function doubleSnapBrainrot(hrp, pos)
+    if not hrp then return end
+    for i = 1, 5 do
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.CFrame = CFrame.new(pos)
+        task.wait(0.025)
     end
-    Equip(CARPET_NAME)
+end
+
+local function pirateV2ToClonePoint(targetPart, hum, hrp)
+    if not targetPart or not hum or not hrp then
+        return false, "missing target/hum/hrp", nil
+    end
+    local initialPlayerPos   = hrp.Position
+    local currentBrainrotPos = targetPart.Position
+    local medPoint = getNearestTeleportV2MedPoint(initialPlayerPos)
+    if not medPoint then
+        return false, "no MED point found", nil
+    end
+    local chosenPoint = getBestTeleportV2SecondFloorPoint(medPoint, currentBrainrotPos)
+    if not chosenPoint then
+        return false, "no TP1-TP12 point found", nil
+    end
+    local isFirstFloorBrainrot = currentBrainrotPos.Y <= 6.313370704650879
+    local chosenTargetPos = isFirstFloorBrainrot
+        and Vector3.new(chosenPoint.pos.X, 1, chosenPoint.pos.Z)
+        or  chosenPoint.pos
+    local signPart  = getClosestBaseSignToPosition(chosenTargetPos) or getClosestBaseSignToPosition(currentBrainrotPos)
+    local faceVector = nil
+    if signPart then
+        faceVector = chosenPoint.facing == "front"
+            and signPart.CFrame.LookVector
+            or -signPart.CFrame.LookVector
+        if faceVector.Magnitude <= 0 then
+            faceVector = nil
+        end
+    end
+    local safeClonePos = chosenTargetPos
+    if signPart then
+        local wallDir = signPart.CFrame.LookVector
+        safeClonePos = chosenTargetPos - wallDir.Unit * 1
+    end
+    local camera        = Workspace.CurrentCamera
+    local prevCameraType= camera and camera.CameraType
+    local prevFov       = camera and camera.FieldOfView
+    local camConn       = nil
+    if faceVector then
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + faceVector)
+        hrp.AssemblyLinearVelocity = Vector3.zero
+    end
+    if camera then
+        camera.CameraType = Enum.CameraType.Scriptable
+        camera.FieldOfView = 95
+        camConn = RunService.RenderStepped:Connect(function()
+            local cHrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+            if cHrp and camera then
+                camera.CFrame = cHrp.CFrame * CFrame.new(0, 2, 10) * CFrame.Angles(math.rad(-5), 0, 0)
+            end
+        end)
+    end
+    local function stopCameraLock()
+        if camConn then
+            camConn:Disconnect()
+            camConn = nil
+        end
+        if camera then
+            if prevCameraType then camera.CameraType = prevCameraType end
+            if prevFov       then camera.FieldOfView  = prevFov end
+        end
+    end
+    local function finish(ok, reason, pos)
+        stopCameraLock()
+        return ok, reason, pos
+    end
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    if hum and hum.Parent then
+        hum:ChangeState(Enum.HumanoidStateType.Jumping)
+    end
+    task.wait(0.01)
+    if not hrp or not hrp.Parent then
+        return finish(false, "hrp lost during jump start", nil)
+    end
+    local medFlatPos = Vector3.new(medPoint.pos.X, hrp.Position.Y, medPoint.pos.Z)
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.CFrame = faceVector
+        and CFrame.new(medFlatPos, medFlatPos + faceVector)
+        or  CFrame.new(medFlatPos)
+    hrp.AssemblyLinearVelocity = Vector3.zero
     task.wait(0.1)
-    if not IsAlive() then return end
-    if not ignoreRagdoll and IsRagdolled(hum) then return end
-    hrp.AssemblyLinearVelocity  = Vector3.zero
-    hrp.AssemblyAngularVelocity = Vector3.zero
-    hrp.Anchored = true
-    task.wait(0.05)
-    hrp.Anchored = false
-    PerformVelocityFloat(targetPart, ignoreRagdoll)
-    if hum and IsAlive() then hum.HipHeight = savedHipHeight end
+    if not hrp or not hrp.Parent then
+        return finish(false, "hrp lost after MED reposition", nil)
+    end
+    local reachedMed = waitUntilHeartbeat(function()
+        return hrp and hrp.Parent and flatDistanceV2(hrp.Position, medPoint.pos) <= 2.5
+    end, 1.5)
+    if not reachedMed then
+        return finish(false, "failed to reach MED point", nil)
+    end
+    local riseTargetY = 45
+    riseToY(hrp, riseTargetY)
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.CFrame = faceVector
+        and CFrame.new(chosenTargetPos, chosenTargetPos + faceVector)
+        or  CFrame.new(chosenTargetPos)
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    local reachedChosen = waitUntilHeartbeat(function()
+        return hrp and hrp.Parent and (hrp.Position - chosenTargetPos).Magnitude <= 2.5
+    end, 3.0)
+    if not reachedChosen then
+        return finish(false, "failed to reach TP1-TP12", nil)
+    end
+    waitSecondsHeartbeat(0.15)
+    if hrp and hrp.Parent then
+        hrp.AssemblyLinearVelocity  = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+        hrp.CFrame = faceVector
+            and CFrame.new(safeClonePos, safeClonePos + faceVector)
+            or  CFrame.new(safeClonePos)
+        hrp.AssemblyLinearVelocity  = Vector3.zero
+    end
+    local finalPos = hrp and hrp.Parent and hrp.Position or nil
+    return finish(true, "ok", finalPos)
 end
 
 local function TriggerTpAfterHit()
@@ -560,8 +728,8 @@ local function TriggerTpAfterHit()
     if isTpMoving then return end
     if not IsAlive() then return end
     local now = tick()
-    if now - LastRagdollTime < RagdollCooldown then return end
-    LastRagdollTime = now
+    if now - LastRagdollTime < RagdolCooldown then return end
+    LastRagdolCooldown = now
     task.delay(0.15, function()
         if not IsAlive() then return end
         local h = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
@@ -625,94 +793,35 @@ local function runAutoSnipe()
     if targetPetData.name then
         ShowNotification(tostring(targetPetData.name) .. " detected!")
     end
-    local exactPos = targetPart.Position
     local carpet = LP.Backpack:FindFirstChild(CARPET_NAME) or char:FindFirstChild(CARPET_NAME)
     if carpet then hum:EquipTool(carpet) end
     task.wait(0.01)
     if not IsAlive() or IsRagdolled(hum) then isTpMoving = false return end
-    local isSecondFloor = exactPos.Y > 10
-    local plotIndex     = getClosestBaseIdx(exactPos)
-    local targetBasePos = isSecondFloor and BASES_HIGH[plotIndex] or BASES_LOW[plotIndex]
-    local targetHeight  = math.max(targetBasePos.Y, 50)
-    local jumpStart = tick()
-    while hrp.Position.Y < targetHeight and (tick() - jumpStart) < 3 do
-        if not IsAlive() or IsRagdolled(hum) then isTpMoving = false return end
-        hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, 200, hrp.AssemblyLinearVelocity.Z)
-        RunService.Heartbeat:Wait()
-    end
-    task.wait(0.1)
-    if wasLaggedBack(targetBasePos, 5) then
+    local ok, reason, cloneTargetPos = pirateV2ToClonePoint(targetPart, hum, hrp)
+    if not ok or not cloneTargetPos then
         isTpMoving = false
-        ShowNotification("Lagback detected, aborting.", Color3.fromRGB(255, 80, 80))
+        ShowNotification("TP V2 failed: " .. tostring(reason), Color3.fromRGB(255, 80, 80))
         return
     end
-    for i = 1, 10 do
-        if not IsAlive() or IsRagdolled(hum) then isTpMoving = false return end
-        hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, 0, hrp.AssemblyLinearVelocity.Z)
-        if (hrp.Position - targetBasePos).Magnitude > 3 then
-            hrp.CFrame = CFrame.new(targetBasePos)
-            task.wait(0.05)
-        end
-    end
-    task.wait(0.05)
-    if wasLaggedBack(targetBasePos, 5) then
-        isTpMoving = false
-        ShowNotification("Lagback detected, aborting.", Color3.fromRGB(255, 80, 80))
-        return
-    end
-    if not isSecondFloor then
-        local bestSpot = CLONE_POSITIONS_FLOOR[1]
-        local minDst   = math.huge
-        for _, v in ipairs(CLONE_POSITIONS_FLOOR) do
-            local d = (targetPart.Position - v).Magnitude
-            if d < minDst then minDst = d; bestSpot = v end
-        end
-        for i = 1, 6 do
-            if not IsAlive() or IsRagdolled(hum) then isTpMoving = false return end
-            if (hrp.Position - bestSpot).Magnitude > 3 then
-                hrp.CFrame = CFrame.new(bestSpot)
-                task.wait(0.05)
-            end
-        end
-        task.wait(0.05)
-        if wasLaggedBack(bestSpot, 5) then
-            isTpMoving = false
-            ShowNotification("Lagback detected, aborting.", Color3.fromRGB(255, 80, 80))
-            return
-        end
-    end
-    local bestFace    = FACE_TARGETS[1]
-    local minFaceDist = math.huge
-    for _, v in ipairs(FACE_TARGETS) do
-        local d = (hrp.Position - v).Magnitude
-        if d < minFaceDist then minFaceDist = d; bestFace = v end
-    end
-    task.wait(0.1)
-    if not IsAlive() or IsRagdolled(hum) then isTpMoving = false return end
-    hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(bestFace.X, hrp.Position.Y, bestFace.Z))
-    local cloneTargetPos = hrp.Position
+    local isSecondFloor = targetPart.Position.Y > 10
     if isSecondFloor or not _G._isTargetPlotUnlocked(targetPetData.plot) then
         if not IsAlive() or IsRagdolled(hum) then isTpMoving = false return end
         walkForward(0.4)
         task.wait(0.4)
         if not IsAlive() or IsRagdolled(hum) then isTpMoving = false return end
-        if wasLaggedBack(cloneTargetPos, 5) then
+        local cloned = instantClone(cloneTargetPos)
+        if not cloned then
+            ShowNotification("instantClone failed (no tp button/clone?)", Color3.fromRGB(255,80,80))
             isTpMoving = false
-            ShowNotification("Lagback detected, aborting clone.", Color3.fromRGB(255, 80, 80))
             return
         end
-        instantClone(cloneTargetPos)
         task.wait(0.3)
-        if wasLaggedBack(cloneTargetPos, 5) then
-            isTpMoving = false
-            ShowNotification("Lagback after clone, aborting.", Color3.fromRGB(255, 80, 80))
-            return
-        end
     end
     if not IsAlive() or IsRagdolled(hum) then isTpMoving = false return end
     if carpet then hum:EquipTool(carpet) end
     local verticalDiff = targetPart.Position.Y - hrp.Position.Y
     if isThirdFloor(targetPart) then
+        doubleSnapBrainrot(hrp, targetPart.Position + Vector3.new(0, 1, 0))
         doThirdFloorFloat(targetPart, false)
     elseif verticalDiff > 2 then
         local airPos = Vector3.new(targetPart.Position.X, targetPart.Position.Y - 6, targetPart.Position.Z)
@@ -744,25 +853,17 @@ local function runAutoSnipe()
             end
             plat:Destroy()
         end)
+        doubleSnapBrainrot(hrp, targetPart.Position + Vector3.new(0, 1, 0))
         PerformVelocityFloat(targetPart, false)
     else
-        for i = 1, 10 do
-            if not IsAlive() or IsRagdolled(hum) then break end
-            if LP:GetAttribute("Stealing") then break end
-            hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-            if (hrp.Position - targetPart.Position).Magnitude > 3 then
-                hrp.CFrame = CFrame.new(targetPart.Position)
-                task.wait(0.05)
-            end
-            task.wait(0.05)
+        if IsAlive() and not IsRagdolled(hum) and not LP:GetAttribute("Stealing") then
+            doubleSnapBrainrot(hrp, targetPart.Position)
         end
     end
     isTpMoving = false
 end
 
--- ============================================
--- GUI
--- ============================================
+_G.runAutoSnipe = runAutoSnipe
 
 if PlayerGui:FindFirstChild("TPPanel_Lethal") then
     PlayerGui.TPPanel_Lethal:Destroy()
@@ -774,14 +875,9 @@ ScreenGui.ResetOnSpawn   = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent         = PlayerGui
 
-local GlobalUIScale = Instance.new("UIScale")
-GlobalUIScale.Name = "GlobalScale"
-GlobalUIScale.Scale = 0.3 + (1.0 - 0.3) * ((Settings.GuiScale - 20) / (100 - 20))
-GlobalUIScale.Parent = ScreenGui
-
 local Main = Instance.new("Frame")
 Main.Name             = "Main"
-Main.Size             = UDim2.new(0, 270, 0, 447)
+Main.Size             = UDim2.new(0, 270, 0, 339)
 Main.Position         = UDim2.new(1, -285, 0, 50)
 Main.BackgroundColor3 = Color3.fromRGB(12, 12, 14)
 Main.BorderSizePixel  = 0
@@ -789,71 +885,8 @@ Main.Parent           = ScreenGui
 Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 10)
 Instance.new("UIStroke", Main).Color        = Color3.fromRGB(35, 35, 40)
 
--- ============================================
--- OPEN BUTTON
--- ============================================
-local OpenButton = Instance.new("TextButton")
-OpenButton.Name             = "OpenButton"
-OpenButton.Size             = UDim2.new(0, 140, 0, 32)
-OpenButton.Position         = UDim2.new(1, -155, 0, 50)
-OpenButton.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
-OpenButton.BorderSizePixel  = 0
-OpenButton.Text             = "Open TP Panel"
-OpenButton.TextColor3       = Color3.fromRGB(170, 170, 180)
-OpenButton.Font             = Enum.Font.GothamBold
-OpenButton.TextSize         = 12
-OpenButton.AutoButtonColor  = false
-OpenButton.Visible          = false
-OpenButton.Parent           = ScreenGui
-Instance.new("UICorner", OpenButton).CornerRadius = UDim.new(0, 8)
-local openStroke = Instance.new("UIStroke", OpenButton)
-openStroke.Color     = Color3.fromRGB(40, 40, 48)
-openStroke.Thickness = 1
-
-OpenButton.MouseEnter:Connect(function()
-    TweenService:Create(OpenButton, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(28, 28, 34)}):Play()
-end)
-OpenButton.MouseLeave:Connect(function()
-    TweenService:Create(OpenButton, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(18, 18, 22)}):Play()
-end)
-
-local function updateOpenButtonVisibility()
-    OpenButton.Visible = not Main.Visible
-end
-
-OpenButton.MouseButton1Click:Connect(function()
-    Main.Visible = true
-    OpenButton.Visible = false
-end)
-
-local openDragging, openDragStart, openStartPos
-OpenButton.InputBegan:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-        openDragging = true
-        openDragStart = i.Position
-        openStartPos = OpenButton.Position
-    end
-end)
-UserInputService.InputChanged:Connect(function(input)
-    if openDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-        local delta = input.Position - openDragStart
-        if delta.Magnitude > 5 then
-            OpenButton.Position = UDim2.new(openStartPos.X.Scale, openStartPos.X.Offset + delta.X, openStartPos.Y.Scale, openStartPos.Y.Offset + delta.Y)
-        end
-    end
-end)
-UserInputService.InputEnded:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-        openDragging = false
-    end
-end)
-
--- ============================================
--- PANEL HEADER
--- ============================================
-
 local Title = Instance.new("TextLabel")
-Title.Size               = UDim2.new(1, -50, 0, 30)
+Title.Size               = UDim2.new(1, -20, 0, 30)
 Title.Position           = UDim2.new(0, 14, 0, 4)
 Title.BackgroundTransparency = 1
 Title.Text               = "TP Panel"
@@ -863,32 +896,8 @@ Title.TextSize           = 15
 Title.TextXAlignment     = Enum.TextXAlignment.Left
 Title.Parent             = Main
 
-local CloseBtn = Instance.new("TextButton")
-CloseBtn.Size               = UDim2.new(0, 26, 0, 26)
-CloseBtn.Position           = UDim2.new(1, -32, 0, 4)
-CloseBtn.BackgroundColor3   = Color3.fromRGB(25, 25, 30)
-CloseBtn.BorderSizePixel    = 0
-CloseBtn.Text               = "×"
-CloseBtn.TextColor3         = Color3.fromRGB(140, 140, 150)
-CloseBtn.Font               = Enum.Font.GothamBold
-CloseBtn.TextSize           = 18
-CloseBtn.AutoButtonColor    = false
-CloseBtn.Parent             = Main
-Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 6)
-
-CloseBtn.MouseEnter:Connect(function()
-    TweenService:Create(CloseBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(60, 30, 30), TextColor3 = Color3.fromRGB(255, 100, 100)}):Play()
-end)
-CloseBtn.MouseLeave:Connect(function()
-    TweenService:Create(CloseBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(25, 25, 30), TextColor3 = Color3.fromRGB(140, 140, 150)}):Play()
-end)
-CloseBtn.MouseButton1Click:Connect(function()
-    Main.Visible = false
-    updateOpenButtonVisibility()
-end)
-
 local PriorityStatus = Instance.new("TextLabel")
-PriorityStatus.Size               = UDim2.new(0, 120, 0, 20)
+PriorityStatus.Size               = UDim2.new(0, 150, 0, 20)
 PriorityStatus.Position           = UDim2.new(1, -160, 0, 8)
 PriorityStatus.BackgroundTransparency = 1
 PriorityStatus.Text               = ""
@@ -1203,259 +1212,6 @@ StatusText.TextSize           = 10
 StatusText.TextXAlignment     = Enum.TextXAlignment.Left
 StatusText.Parent             = StatusBar
 
--- ============================================
--- SETTINGS SECTION
--- ============================================
-
-local SettingsDivider = Instance.new("Frame", Main)
-SettingsDivider.Size             = UDim2.new(0.9, 0, 0, 1)
-SettingsDivider.Position         = UDim2.new(0.05, 0, 0, 337)
-SettingsDivider.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-SettingsDivider.BorderSizePixel  = 0
-
-local SettingsLabel = Instance.new("TextLabel")
-SettingsLabel.Size               = UDim2.new(0.9, 0, 0, 20)
-SettingsLabel.Position           = UDim2.new(0.05, 0, 0, 345)
-SettingsLabel.BackgroundTransparency = 1
-SettingsLabel.Text               = "Settings"
-SettingsLabel.TextColor3         = Color3.fromRGB(130, 130, 140)
-SettingsLabel.Font               = Enum.Font.GothamBold
-SettingsLabel.TextSize           = 11
-SettingsLabel.TextXAlignment     = Enum.TextXAlignment.Left
-SettingsLabel.Parent             = Main
-
--- Auto Open on Load
-local AutoOpenFrame = Instance.new("Frame")
-AutoOpenFrame.Size             = UDim2.new(0.9, 0, 0, 30)
-AutoOpenFrame.Position         = UDim2.new(0.05, 0, 0, 368)
-AutoOpenFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
-AutoOpenFrame.BorderSizePixel  = 0
-AutoOpenFrame.Parent           = Main
-Instance.new("UICorner", AutoOpenFrame).CornerRadius = UDim.new(0, 6)
-
-local AutoOpenLabel = Instance.new("TextLabel")
-AutoOpenLabel.Size               = UDim2.new(0.65, 0, 1, 0)
-AutoOpenLabel.Position           = UDim2.new(0, 10, 0, 0)
-AutoOpenLabel.BackgroundTransparency = 1
-AutoOpenLabel.Text               = "Auto Open on Load"
-AutoOpenLabel.Font               = Enum.Font.Gotham
-AutoOpenLabel.TextSize           = 11
-AutoOpenLabel.TextXAlignment     = Enum.TextXAlignment.Left
-AutoOpenLabel.TextColor3         = Color3.fromRGB(160, 160, 175)
-AutoOpenLabel.Parent             = AutoOpenFrame
-
-local AutoOpenToggleBg = Instance.new("Frame")
-AutoOpenToggleBg.Size             = UDim2.new(0, 36, 0, 18)
-AutoOpenToggleBg.Position         = UDim2.new(1, -46, 0.5, -9)
-AutoOpenToggleBg.BackgroundColor3 = Color3.fromRGB(32, 32, 38)
-AutoOpenToggleBg.BorderSizePixel  = 0
-AutoOpenToggleBg.Parent           = AutoOpenFrame
-Instance.new("UICorner", AutoOpenToggleBg).CornerRadius = UDim.new(1, 0)
-
-local AutoOpenCircle = Instance.new("Frame")
-AutoOpenCircle.Size             = UDim2.new(0, 14, 0, 14)
-AutoOpenCircle.Position         = UDim2.new(0, 2, 0.5, -7)
-AutoOpenCircle.BackgroundColor3 = Color3.fromRGB(90, 90, 100)
-AutoOpenCircle.BorderSizePixel  = 0
-AutoOpenCircle.Parent           = AutoOpenToggleBg
-Instance.new("UICorner", AutoOpenCircle).CornerRadius = UDim.new(1, 0)
-
-local AutoOpenBtn = Instance.new("TextButton")
-AutoOpenBtn.Size               = UDim2.new(1, 0, 1, 0)
-AutoOpenBtn.BackgroundTransparency = 1
-AutoOpenBtn.Text               = ""
-AutoOpenBtn.Parent             = AutoOpenToggleBg
-
-local function updateAutoOpenVisual(instant)
-    local on = Settings.AutoOpenOnLoad
-    local cPos = on and UDim2.new(0, 20, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
-    local cCol = on and Color3.fromRGB(200, 200, 210) or Color3.fromRGB(90, 90, 100)
-    local bgCol = on and Color3.fromRGB(55, 55, 65) or Color3.fromRGB(32, 32, 38)
-    local tCol = on and Color3.fromRGB(220, 220, 230) or Color3.fromRGB(160, 160, 175)
-    if instant then
-        AutoOpenCircle.Position = cPos
-        AutoOpenCircle.BackgroundColor3 = cCol
-        AutoOpenToggleBg.BackgroundColor3 = bgCol
-        AutoOpenLabel.TextColor3 = tCol
-    else
-        TweenService:Create(AutoOpenCircle, TweenInfo.new(0.2), {Position=cPos, BackgroundColor3=cCol}):Play()
-        TweenService:Create(AutoOpenToggleBg, TweenInfo.new(0.2), {BackgroundColor3=bgCol}):Play()
-        TweenService:Create(AutoOpenLabel, TweenInfo.new(0.2), {TextColor3=tCol}):Play()
-    end
-end
-updateAutoOpenVisual(true)
-AutoOpenBtn.MouseButton1Click:Connect(function()
-    Settings.AutoOpenOnLoad = not Settings.AutoOpenOnLoad
-    updateAutoOpenVisual(false)
-    SaveSettings()
-end)
-
--- GUI Scale Slider with TextBox input
-local GuiScaleFrame = Instance.new("Frame")
-GuiScaleFrame.Size             = UDim2.new(0.9, 0, 0, 36)
-GuiScaleFrame.Position         = UDim2.new(0.05, 0, 0, 403)
-GuiScaleFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
-GuiScaleFrame.BorderSizePixel  = 0
-GuiScaleFrame.Parent           = Main
-Instance.new("UICorner", GuiScaleFrame).CornerRadius = UDim.new(0, 6)
-
-local GuiScaleLabel = Instance.new("TextLabel")
-GuiScaleLabel.Size               = UDim2.new(0, 65, 1, 0)
-GuiScaleLabel.Position           = UDim2.new(0, 10, 0, 0)
-GuiScaleLabel.BackgroundTransparency = 1
-GuiScaleLabel.Text               = "GUI Scale"
-GuiScaleLabel.Font               = Enum.Font.Gotham
-GuiScaleLabel.TextSize           = 11
-GuiScaleLabel.TextXAlignment     = Enum.TextXAlignment.Left
-GuiScaleLabel.TextColor3         = Color3.fromRGB(160, 160, 175)
-GuiScaleLabel.Parent             = GuiScaleFrame
-
-local GuiScaleBar = Instance.new("Frame")
-GuiScaleBar.Size             = UDim2.new(0, 100, 0, 5)
-GuiScaleBar.Position         = UDim2.new(0, 80, 0.5, -2)
-GuiScaleBar.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
-GuiScaleBar.BorderSizePixel  = 0
-GuiScaleBar.Parent           = GuiScaleFrame
-Instance.new("UICorner", GuiScaleBar).CornerRadius = UDim.new(1, 0)
-
-local GuiScaleFill = Instance.new("Frame")
-GuiScaleFill.Size             = UDim2.new(0, 0, 1, 0)
-GuiScaleFill.BackgroundColor3 = Color3.fromRGB(200, 200, 210)
-GuiScaleFill.BorderSizePixel  = 0
-GuiScaleFill.Parent           = GuiScaleBar
-Instance.new("UICorner", GuiScaleFill).CornerRadius = UDim.new(1, 0)
-
-local GuiScaleKnob = Instance.new("Frame")
-GuiScaleKnob.Size             = UDim2.new(0, 10, 0, 10)
-GuiScaleKnob.Position         = UDim2.new(0, -5, 0.5, -5)
-GuiScaleKnob.BackgroundColor3 = Color3.fromRGB(230, 230, 235)
-GuiScaleKnob.BorderSizePixel  = 0
-GuiScaleKnob.Parent           = GuiScaleBar
-Instance.new("UICorner", GuiScaleKnob).CornerRadius = UDim.new(1, 0)
-
-local GuiScaleValueBG = Instance.new("Frame")
-GuiScaleValueBG.Size             = UDim2.new(0, 45, 0, 18)
-GuiScaleValueBG.Position         = UDim2.new(1, -52, 0.5, -9)
-GuiScaleValueBG.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-GuiScaleValueBG.BorderSizePixel  = 0
-GuiScaleValueBG.Parent           = GuiScaleFrame
-Instance.new("UICorner", GuiScaleValueBG).CornerRadius = UDim.new(0, 4)
-
-local GuiScaleInput = Instance.new("TextBox")
-GuiScaleInput.Size               = UDim2.new(1, 0, 1, 0)
-GuiScaleInput.BackgroundTransparency = 1
-GuiScaleInput.Text               = tostring(Settings.GuiScale) .. "%"
-GuiScaleInput.Font               = Enum.Font.GothamBold
-GuiScaleInput.TextSize           = 10
-GuiScaleInput.TextColor3         = Color3.fromRGB(200, 200, 210)
-GuiScaleInput.TextXAlignment     = Enum.TextXAlignment.Center
-GuiScaleInput.ClearTextOnFocus   = false
-GuiScaleInput.PlaceholderColor3  = Color3.fromRGB(100, 100, 110)
-GuiScaleInput.Parent             = GuiScaleValueBG
-
-local guiScaleDragging = false
-
-local function setGuiScaleFromAlpha(a, instant)
-    a = math.clamp(a, 0, 1)
-    local value = math.floor(20 + (100 - 20) * a + 0.5)
-    Settings.GuiScale = value
-    if not GuiScaleInput:IsFocused() then
-        GuiScaleInput.Text = tostring(value) .. "%"
-    end
-    local sizeX = GuiScaleBar.AbsoluteSize.X
-    if sizeX <= 0 then return end
-    local x = a * sizeX
-    if instant then
-        GuiScaleFill.Size = UDim2.new(0, x, 1, 0)
-        GuiScaleKnob.Position = UDim2.new(0, x - 5, 0.5, -5)
-    else
-        TweenService:Create(GuiScaleFill, TweenInfo.new(0.1), {Size = UDim2.new(0, x, 1, 0)}):Play()
-        TweenService:Create(GuiScaleKnob, TweenInfo.new(0.1), {Position = UDim2.new(0, x - 5, 0.5, -5)}):Play()
-    end
-    local scale = 0.3 + (1.0 - 0.3) * ((value - 20) / (100 - 20))
-    if instant then
-        GlobalUIScale.Scale = scale
-    else
-        TweenService:Create(GlobalUIScale, TweenInfo.new(0.15), {Scale = scale}):Play()
-    end
-    SaveSettings()
-end
-
-local function updateGuiScaleFromX(px)
-    local absPos = GuiScaleBar.AbsolutePosition.X
-    local sizeX = GuiScaleBar.AbsoluteSize.X
-    if sizeX <= 0 then return end
-    local alpha = (px - absPos) / sizeX
-    setGuiScaleFromAlpha(alpha, false)
-end
-
-GuiScaleInput.FocusLost:Connect(function()
-    local txt = GuiScaleInput.Text:gsub("%%", "")
-    local num = tonumber(txt)
-    if num then
-        num = math.clamp(math.floor(num + 0.5), 20, 100)
-        Settings.GuiScale = num
-        local alpha = (num - 20) / (100 - 20)
-        setGuiScaleFromAlpha(alpha, false)
-    else
-        GuiScaleInput.Text = tostring(Settings.GuiScale) .. "%"
-    end
-end)
-
-GuiScaleBar.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        guiScaleDragging = true
-        isInteractingWithSlider = true
-        updateGuiScaleFromX(input.Position.X)
-    end
-end)
-
-GuiScaleKnob.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        guiScaleDragging = true
-        isInteractingWithSlider = true
-    end
-end)
-
-UserInputService.InputChanged:Connect(function(input)
-    if guiScaleDragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-        updateGuiScaleFromX(input.Position.X)
-    end
-end)
-
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        if guiScaleDragging then
-            guiScaleDragging = false
-            isInteractingWithSlider = false
-        end
-    end
-end)
-
--- Finale Hoehe
-Main.Size = UDim2.new(0, 270, 0, 447)
-
--- Slider initial
-task.defer(function()
-    local alpha = (Settings.GuiScale - 20) / (100 - 20)
-    setGuiScaleFromAlpha(alpha, true)
-end)
-
--- Auto Open beim Start
-task.defer(function()
-    if not Settings.AutoOpenOnLoad then
-        Main.Visible = false
-        OpenButton.Visible = true
-    else
-        Main.Visible = true
-        OpenButton.Visible = false
-    end
-end)
-
--- ============================================
--- KEYBIND + INPUT
--- ============================================
-
 local TpKeyCode             = Enum.KeyCode[Settings.TpKey] or Enum.KeyCode.T
 local TpBrainrotKeyCode     = Enum.KeyCode[Settings.TpToBrainrotKey] or Enum.KeyCode.G
 local waitingForTpKeybind   = false
@@ -1498,46 +1254,12 @@ UserInputService.InputBegan:Connect(function(input, gpe)
         return
     end
     if input.UserInputType~=Enum.UserInputType.Keyboard then return end
-
-    if input.KeyCode == Enum.KeyCode.RightControl then
-        Main.Visible = not Main.Visible
-        updateOpenButtonVisibility()
-        return
-    end
-
     if input.KeyCode==TpKeyCode then
         task.spawn(runAutoSnipe)
     elseif input.KeyCode==TpBrainrotKeyCode then
         task.spawn(function() TeleportToBrainrot() end)
     end
 end)
-
--- ============================================
--- DRAGGING (blocked when slider active)
--- ============================================
-
-local dragging, dragStart, startPos
-Main.InputBegan:Connect(function(i)
-    if isInteractingWithSlider then return end
-    if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
-        dragging=true; dragStart=i.Position; startPos=Main.Position
-    end
-end)
-UserInputService.InputChanged:Connect(function(input)
-    if dragging and not isInteractingWithSlider and (input.UserInputType==Enum.UserInputType.MouseMovement or input.UserInputType==Enum.UserInputType.Touch) then
-        local delta=input.Position-dragStart
-        Main.Position=UDim2.new(startPos.X.Scale,startPos.X.Offset+delta.X,startPos.Y.Scale,startPos.Y.Offset+delta.Y)
-    end
-end)
-UserInputService.InputEnded:Connect(function(i)
-    if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
-        dragging=false
-    end
-end)
-
--- ============================================
--- STATUS + PRIORITY LOOP
--- ============================================
 
 local hadPriorityLast = true
 task.spawn(function()
@@ -1563,9 +1285,23 @@ task.spawn(function()
     end
 end)
 
--- ============================================
--- AUTO TP ON LOAD
--- ============================================
+local dragging, dragStart, startPos
+Main.InputBegan:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+        dragging=true; dragStart=i.Position; startPos=Main.Position
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType==Enum.UserInputType.MouseMovement or input.UserInputType==Enum.UserInputType.Touch) then
+        local delta=input.Position-dragStart
+        Main.Position=UDim2.new(startPos.X.Scale,startPos.X.Offset+delta.X,startPos.Y.Scale,startPos.Y.Offset+delta.Y)
+    end
+end)
+UserInputService.InputEnded:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+        dragging=false
+    end
+end)
 
 task.spawn(function()
     local char = LP.Character or LP.CharacterAdded:Wait()
