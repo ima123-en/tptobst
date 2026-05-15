@@ -1075,8 +1075,8 @@ UserInputService.InputEnded:Connect(function(i)
 end)
 
 local Title = Instance.new("TextLabel")
-Title.Size               = UDim2.new(1, -50, 0, 30)
-Title.Position           = UDim2.new(0, 14, 0, 4)
+Title.Size               = UDim2.new(0, 90, 0, 30)
+Title.Position           = UDim2.new(0, 10, 0, 4)
 Title.BackgroundTransparency = 1
 Title.Text               = "TP Panel"
 Title.TextColor3         = Color3.fromRGB(210, 210, 215)
@@ -1110,14 +1110,15 @@ CloseButton.MouseButton1Click:Connect(function()
 end)
 
 local PriorityStatus = Instance.new("TextLabel")
-PriorityStatus.Size               = UDim2.new(0, 150, 0, 20)
-PriorityStatus.Position           = UDim2.new(1, -160, 0, 8)
+PriorityStatus.Size               = UDim2.new(0, 140, 0, 20)
+PriorityStatus.Position           = UDim2.new(0, 106, 0, 8)
 PriorityStatus.BackgroundTransparency = 1
 PriorityStatus.Text               = ""
 PriorityStatus.TextColor3         = Color3.fromRGB(100, 200, 100)
 PriorityStatus.Font               = Enum.Font.Gotham
 PriorityStatus.TextSize           = 9
-PriorityStatus.TextXAlignment     = Enum.TextXAlignment.Right
+PriorityStatus.TextXAlignment     = Enum.TextXAlignment.Left
+PriorityStatus.TextTruncate       = Enum.TextTruncate.AtEnd
 PriorityStatus.Parent             = Main
 
 local Divider = Instance.new("Frame", Main)
@@ -1610,22 +1611,24 @@ end
 
 task.spawn(function()
     local char = LP.Character or LP.CharacterAdded:Wait()
-    char:WaitForChild("HumanoidRootPart", 5)
-    char:WaitForChild("Humanoid", 5)
+    char:WaitForChild("HumanoidRootPart", 10)
+    char:WaitForChild("Humanoid", 10)
+    task.wait(3)
     if not Settings.AutoTpOnLoad then return end
-    local totalTimeout = 3
+    local totalTimeout = 8
     local t0 = tick()
     local didRun = false
     while tick() - t0 < totalTimeout do
-        if characterIsStableFor(0.8, 2) then
+        if characterIsStableFor(1.2, 3) then
             local targetData, targetPart = GetBestTarget()
             if targetPart and targetData and targetData.name then
+                task.wait(0.5)
                 runAutoSnipe()
                 didRun = true
                 break
             end
         end
-        task.wait(0.2)
+        task.wait(0.3)
     end
     if not didRun then
         return
