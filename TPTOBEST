@@ -384,6 +384,8 @@ local function walkForward(seconds)
 	end)
 end
 
+local lastCloneTpTime = 0
+
 local function waitForClone(timeoutSecs)
 	local cloneName = tostring(LP.UserId) .. "_Clone"
 	if Workspace:FindFirstChild(cloneName) then return true end
@@ -456,7 +458,12 @@ local function instantClone(targetPos)
 		end
 		if not tpButton then return end
 		if targetPos and wasLaggedBack(targetPos, 5) then return end
+		local now = tick()
+		if now - lastCloneTpTime < 0.4 then
+			task.wait(0.4 - (now - lastCloneTpTime))
+		end
 		clickTpButton(tpButton)
+		lastCloneTpTime = tick()
 		success = true
 	end)
 	_G.isCloning = false
@@ -673,6 +680,28 @@ local function isThirdFloor(targetPart)
 	return targetPart.Position.Y > 35
 end
 
+local function hasClearPathToTarget(hrpPos, targetPos)
+	local dir = targetPos - hrpPos
+	local dist = dir.Magnitude
+	if dist <= 1e-3 then return true end
+	local params = RaycastParams.new()
+	local ignoreList = {LP.Character}
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LP and p.Character then
+			table.insert(ignoreList, p.Character)
+		end
+	end
+	params.FilterDescendantsInstances = ignoreList
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.IgnoreWater = true
+	local result = Workspace:Raycast(hrpPos, dir, params)
+	if not result then return true end
+	if result.Instance and not result.Instance.CanCollide then
+		return true
+	end
+	return false
+end
+
 local function TeleportToBrainrot(skipAutoSnipe)
 	if not IsAlive() then return end
 	local c   = LP.Character
@@ -683,6 +712,9 @@ local function TeleportToBrainrot(skipAutoSnipe)
 	if IsHoldingBrainrot() or LP:GetAttribute("Stealing") then return end
 	local targetData, targetPart = GetBestTarget()
 	if not targetPart then return end
+	if not hasClearPathToTarget(hrp.Position, targetPart.Position) then
+		return
+	end
 	PlaySound("131661992591924")
 	Equip(CARPET_NAME)
 	task.wait(0.1)
@@ -691,12 +723,12 @@ local function TeleportToBrainrot(skipAutoSnipe)
 	hrp.AssemblyLinearVelocity  = Vector3.zero
 	hrp.AssemblyAngularVelocity = Vector3.zero
 	task.wait(0.15)
-	for i = 1, 50 do
+	for i = 1, 10 do
 		if not IsAlive() or IsRagdolled(hum) then break end
 		if LP:GetAttribute("Stealing") or IsHoldingBrainrot() then break end
 		hrp.AssemblyLinearVelocity = Vector3.zero
 		hrp.CFrame = CFrame.new(targetPart.Position + Vector3.new(0, 1, 0))
-		task.wait(0.)
+		task.wait(0.04)
 	end
 	hrp.AssemblyLinearVelocity = Vector3.zero
 	if hum and IsAlive() then hum.HipHeight = savedHipHeight end
@@ -722,6 +754,13 @@ local function TriggerTpAfterHit()
 		local h = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
 		if h and IsRagdolled(h) then
 			pcall(function() h:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+		end
+		local _, targetPart = GetBestTarget()
+		local c = LP.Character
+		local hrp = c and c:FindFirstChild("HumanoidRootPart")
+		if not targetPart or not hrp then return end
+		if not hasClearPathToTarget(hrp.Position, targetPart.Position) then
+			return
 		end
 		TeleportToBrainrot(true)
 	end)
@@ -916,7 +955,7 @@ local function runAutoSnipe_OldMethod()
 		plat.Parent = Workspace
 
 		RunService.Heartbeat:Wait()
-		for i = 1, 5 do
+		for i = 1, 10 do
 			if not IsAlive() or IsRagdolled(hum) then break end
 			if not LP:GetAttribute("Stealing") then
 				hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
@@ -1022,7 +1061,7 @@ local function runAutoSnipe()
 		plat.Parent = Workspace
 
 		RunService.Heartbeat:Wait()
-		for i = 1, 5 do
+		for i = 1, 10 do
 			if not IsAlive() or IsRagdolled(hum) then break end
 			if not LP:GetAttribute("Stealing") then
 				hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
