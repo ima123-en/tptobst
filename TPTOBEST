@@ -668,12 +668,13 @@ local function TeleportToBrainrot(skipAutoSnipe)
     if IsRagdolled(hum) then return end
     hrp.AssemblyLinearVelocity  = Vector3.zero
     hrp.AssemblyAngularVelocity = Vector3.zero
-    for i = 1, 7 do
+    task.wait(0.15)
+    for i = 1, 14 do
         if not IsAlive() or IsRagdolled(hum) then break end
         if LP:GetAttribute("Stealing") or IsHoldingBrainrot() then break end
         hrp.AssemblyLinearVelocity = Vector3.zero
         hrp.CFrame = CFrame.new(targetPart.Position + Vector3.new(0, 1, 0))
-        task.wait(0.02)
+        task.wait(0.015)
     end
     hrp.AssemblyLinearVelocity = Vector3.zero
     if hum and IsAlive() then hum.HipHeight = savedHipHeight end
@@ -1613,22 +1614,22 @@ task.spawn(function()
     local char = LP.Character or LP.CharacterAdded:Wait()
     char:WaitForChild("HumanoidRootPart", 10)
     char:WaitForChild("Humanoid", 10)
-    task.wait(3)
+    task.wait(1.5)
     if not Settings.AutoTpOnLoad then return end
-    local totalTimeout = 8
+    local totalTimeout = 5
     local t0 = tick()
     local didRun = false
     while tick() - t0 < totalTimeout do
-        if characterIsStableFor(1.2, 3) then
+        if characterIsStableFor(0.6, 2.5) then
             local targetData, targetPart = GetBestTarget()
             if targetPart and targetData and targetData.name then
-                task.wait(0.5)
+                task.wait(0.3)
                 runAutoSnipe()
                 didRun = true
                 break
             end
         end
-        task.wait(0.3)
+        task.wait(0.2)
     end
     if not didRun then
         return
